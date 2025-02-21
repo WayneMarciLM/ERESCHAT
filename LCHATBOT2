@@ -1,0 +1,474 @@
+import os
+import re
+import uuid
+import pandas as pd
+from PIL import Image
+import pytesseract
+from pdf2image import convert_from_path
+from langdetect import detect
+from deep_translator import GoogleTranslator
+
+
+
+-----------
+
+
+# Set the path to tesseract executable - adjust this based on your EC2 setup
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'  # Common Linux path
+# If using Windows or different location, change accordingly
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+
+-------
+
+
+def extract_text_with_tesseract(pdf_path):
+    """
+    Extract text from a PDF file using Tesseract OCR.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        
+    Returns:
+        Extracted text from all pages
+    """
+    try:
+        # Convert PDF to images
+        images = convert_from_path(pdf_path)
+        
+        # Extract text from each page image
+        extracted_text = ""
+        for i, img in enumerate(images):
+            print(f"Processing page {i+1}/{len(images)}")
+            text = pytesseract.image_to_string(img)
+            extracted_text += text + "\n\n"
+            
+        return extracted_text
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        return ""
+
+
+---------
+
+
+def detect_language(text):
+    """Detect the language of the input text."""
+    try:
+        # Use a substantial chunk of text for more accurate detection
+        sample_text = text[:3000].replace('\n', ' ').strip()
+        return detect(sample_text)
+    except Exception as e:
+        print(f"Language detection error: {e}")
+        return "en"  # Default to English if detection fails
+
+def translate_text(text, source_lang="auto", target_lang="en"):
+    """Translate text to the target language."""
+    try:
+        if not text.strip():
+            return ""
+            
+        # Handle long texts by breaking them into chunks
+        max_chunk_size = 4000  # Safe limit for GoogleTranslator
+        result = ""
+        
+        # Process text in chunks
+        for i in range(0, len(text), max_chunk_size):
+            chunk = text[i:i + max_chunk_size]
+            if chunk.strip():  # Only translate non-empty chunks
+                translated_chunk = GoogleTranslator(source=source_lang, target=target_lang).translate(chunk)
+                result += translated_chunk + " "
+                print(f"Translated chunk {i//max_chunk_size + 1}")
+            
+        return result.strip()
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return text  # Return original text if translation fails
+
+
+
+-------------
+
+
+def process_document(pdf_path, output_dir):
+    """Process PDF: extract with Tesseract, detect language, translate, and save."""
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Extract text using Tesseract
+    print("Extracting text with Tesseract OCR...")
+    original_text = extract_text_with_tesseract(pdf_path)
+    
+    if not original_text.strip():
+        print("Warning: No text extracted from the document")
+        return None
+    
+    # Get filename without extension
+    base_filename = os.path.splitext(os.path.basename(pdf_path))[0]
+    
+    # Detect language
+    print("Detecting language...")
+    detected_lang = detect_language(original_text)
+    print(f"Detected language: {detected_lang}")
+    
+    # Save original text
+    original_path = os.path.join(output_dir, f"{base_filename}_original_{detected_lang}.txt")
+    with open(original_path, 'w', encoding='utf-8') as f:
+        f.write(original_text)
+    print(f"Original text saved to: {original_path}")
+    
+    # Translate if not already English
+    if detected_lang != 'en':
+        print(f"Translating from {detected_lang} to English...")
+        translated_text = translate_text(original_text, source_lang=detected_lang, target_lang='en')
+        translated_path = os.path.join(output_dir, f"{base_filename}_translated_en.txt")
+        with open(translated_path, 'w', encoding='utf-8') as f:
+            f.write(translated_text)
+        print(f"Translated text saved to: {translated_path}")
+    else:
+        print("Document already in English, skipping translation")
+        translated_text = original_text
+        translated_path = original_path
+    
+    return {
+        'original_path': original_path,
+        'translated_path': translated_path,
+        'language': detected_lang,
+        'original_text': original_text,
+        'translated_text': translated_text
+    }
+
+
+-----------
+
+def create_indexed_sections(text, section_patterns=None):
+    """
+    Index lines of text and identify sections.
+    
+    Args:
+        text: The text to process
+        section_patterns: List of regex patterns to identify section headers
+    
+    Returns:
+        DataFrame with indexed lines and section information
+    """
+    # Default section patterns if none provided
+    if section_patterns is None:
+        section_patterns = [
+            r'^#+\s+(.+)$',                # Markdown headers
+            r'^(\d+\.(?:\d+\.)*\s+.+)$',   # Numbered sections (1., 1.1., etc)
+            r'^([A-Z][A-Z\s]+:?)$',        # ALL CAPS sections
+            r'^(Article\s+\d+[.:])(?:\s+|$)',  # Article sections
+            r'^(Section\s+\d+[.:])(?:\s+|$)',  # Section headers
+            r'^(CHAPTER\s+[IVX0-9]+)(?:\s+|$)' # Chapter headers (Roman or Arabic)
+        ]
+    
+    # Split text into lines and create initial dataframe
+    lines = text.split('\n')
+    df = pd.DataFrame({
+        'line_idx': range(len(lines)),
+        'content': lines
+    })
+    
+    # Remove empty lines
+    df = df[df['content'].str.strip() != '']
+    df = df.reset_index(drop=True)
+    
+    if len(df) == 0:
+        print("Warning: No content found after removing empty lines")
+        # Create minimal structure to prevent errors
+        return pd.DataFrame({
+            'line_idx': [0],
+            'content': ["NO CONTENT EXTRACTED"],
+            'section': ["DOCUMENT"],
+            'section_level': [0],
+            'is_section_header': [True],
+            'id': [str(uuid.uuid4())]
+        })
+    
+    # Identify sections
+    current_section = "INTRODUCTION"
+    sections = []
+    section_levels = []
+    
+    for idx, line in df.iterrows():
+        is_section_header = False
+        level = None
+        
+        for pattern in section_patterns:
+            if re.match(pattern, line['content'].strip()):
+                current_section = line['content'].strip()
+                is_section_header = True
+                
+                # Determine section level
+                if line['content'].startswith('#'):
+                    level = len(re.match(r'^(#+)', line['content']).group(1))
+                elif re.match(r'^\d+\.\d+\.\d+', line['content']):
+                    level = 3
+                elif re.match(r'^\d+\.\d+', line['content']):
+                    level = 2
+                elif re.match(r'^\d+\.', line['content']):
+                    level = 1
+                else:
+                    level = 1
+                break
+        
+        sections.append(current_section)
+        section_levels.append(level)
+    
+    df['section'] = sections
+    df['section_level'] = section_levels
+    df['is_section_header'] = [level is not None for level in section_levels]
+    
+    # Generate unique IDs for each entry
+    df['id'] = [str(uuid.uuid4()) for _ in range(len(df))]
+    
+    return df
+
+
+---------
+
+
+
+def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
+    """
+    Complete pipeline to:
+    1. Extract text from PDF using Tesseract OCR
+    2. Detect language
+    3. Translate if needed
+    4. Index and identify sections
+    5. Save processed data
+    """
+    print(f"Processing document: {pdf_path}")
+    
+    # Process the document
+    doc_info = process_document(pdf_path, output_dir)
+    
+    if doc_info is None:
+        print("Document processing failed - no text extracted")
+        return None, None
+    
+    print("Creating indexed sections for original text...")
+    # Create indexed sections for original text
+    original_df = create_indexed_sections(
+        doc_info['original_text'],
+        section_patterns=section_patterns
+    )
+    original_df['language'] = doc_info['language']
+    original_df['is_translated'] = False
+    
+    # Save indexed original text
+    original_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_original_indexed.xlsx")
+    original_df.to_excel(original_excel_path, index=False)
+    print(f"Original indexed text saved to: {original_excel_path}")
+    
+    # Create indexed sections for translated text (if different from original)
+    if doc_info['language'] != 'en':
+        print("Creating indexed sections for translated text...")
+        translated_df = create_indexed_sections(
+            doc_info['translated_text'],
+            section_patterns=section_patterns
+        )
+        translated_df['language'] = 'en'
+        translated_df['is_translated'] = True
+        
+        # Save translated dataframe
+        translated_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_translated_indexed.xlsx")
+        translated_df.to_excel(translated_excel_path, index=False)
+        print(f"Translated indexed text saved to: {translated_excel_path}")
+        
+        return original_df, translated_df
+    else:
+        print("Document already in English, no separate translated index needed")
+        return original_df, None
+
+
+---------
+
+
+
+# This cell assumes you're working with llama_index similar to your original code
+# First, set up environment variables
+import os
+os.environ["OPENAI_API_KEY"] = "redacted"
+
+
+-----------
+
+
+
+# Import needed libraries for LlamaIndex
+from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+
+# Set up LLM client
+azure_llm = AzureOpenAI(
+    model="gpt-4o-2024-05-13",
+    engine="gpt-4o-2024-05-13",
+    api_key="redacted",
+    azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+    default_headers={"use-case": "ERES Lease Test"}
+)
+
+# Set up your Azure OpenAI embeddings
+os.environ["CORTEX_API_TOKEN"] = "redacted"  # Secure your API keys appropriately
+
+azure_embedding = AzureOpenAIEmbedding(
+    model_name="text-embedding-ada-002",
+    deployment_name="TEXT_EMBEDDING_ADA_002_V2",
+    azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+    api_key=os.environ.get("CORTEX_API_TOKEN"),
+    api_version="2023-09-01-preview"
+)
+
+
+
+--------
+
+
+
+from llama_index import Document, ServiceContext, VectorStoreIndex
+
+def create_llama_index(df, llm_client, embedding_client, index_name):
+    """
+    Create LlamaIndex from processed document dataframe
+    """
+    if df is None or len(df) == 0:
+        print(f"Cannot create index '{index_name}': Empty dataframe")
+        return None
+        
+    print(f"Creating LlamaIndex '{index_name}'...")
+    
+    # Create documents from sections
+    documents = []
+    for section_name, group in df.groupby('section'):
+        # If this is just a section header without content, skip
+        if len(group) <= 1 and all(group['is_section_header']):
+            continue
+            
+        # Filter out section headers if needed
+        content_rows = group[~group['is_section_header']] if any(group['is_section_header']) else group
+        
+        if len(content_rows) == 0:
+            continue
+            
+        # Join the content within this section
+        content = "\n".join(content_rows['content'].tolist())
+        
+        # Create a Document object
+        doc = Document(
+            text=content,
+            metadata={
+                "section": section_name,
+                "language": group['language'].iloc[0],
+                "is_translated": str(group['is_translated'].iloc[0]),
+                "line_ids": ",".join(group['id'].tolist())
+            }
+        )
+        documents.append(doc)
+    
+    if not documents:
+        print(f"Warning: No documents created for index '{index_name}'")
+        return None
+    
+    # Create service context
+    service_context = ServiceContext.from_defaults(
+        llm=llm_client,
+        embed_model=embedding_client
+    )
+    
+    # Create vector store index
+    index = VectorStoreIndex.from_documents(
+        documents,
+        service_context=service_context
+    )
+    
+    print(f"Created index with {len(documents)} documents")
+    return index
+
+
+
+-------
+
+# Example usage with a multi-page PDF document
+pdf_path = "/path/to/your/multilingual_document.pdf"
+output_dir = "/path/to/output_folder"
+
+# Custom section patterns - adjust based on your document structure
+custom_patterns = [
+    r'^#+\s+(.+)$',                      # Markdown headers
+    r'^(\d+\.\d+\.\s+.+)$',              # Nested numbered sections
+    r'^(APPENDIX [A-Z])',                # Appendices
+    r'^([A-Z][A-Z\s]+:)(?:\s+|$)',       # ALL CAPS sections with colon
+    r'^(Article\s+\d+\.\d+)(?:\s+|$)',   # Article subsections
+]
+
+# Process the document
+original_df, translated_df = process_multilingual_document(
+    pdf_path,
+    output_dir,
+    section_patterns=custom_patterns
+)
+
+# Create indices directory
+indices_dir = os.path.join(output_dir, "indices")
+os.makedirs(indices_dir, exist_ok=True)
+
+# Create and save indices
+if original_df is not None:
+    # Original language index
+    lang_code = original_df['language'].iloc[0]
+    original_index = create_llama_index(
+        original_df, 
+        azure_llm, 
+        azure_embedding,
+        f"original_{lang_code}_index"
+    )
+    
+    if original_index:
+        original_index.storage_context.persist(os.path.join(indices_dir, f"original_{lang_code}_index"))
+        print(f"Original language index saved to: {os.path.join(indices_dir, f'original_{lang_code}_index')}")
+
+if translated_df is not None:
+    # Translated index (English)
+    translated_index = create_llama_index(
+        translated_df, 
+        azure_llm, 
+        azure_embedding,
+        "translated_en_index"
+    )
+    
+    if translated_index:
+        translated_index.storage_context.persist(os.path.join(indices_dir, "translated_en_index"))
+        print(f"Translated index saved to: {os.path.join(indices_dir, 'translated_en_index')}")
+
+
+
+
+--------
+
+
+def create_multilingual_query_engine(original_index_path, translated_index_path=None):
+    """
+    Create a query engine that can handle both original and translated content
+    """
+    from llama_index import StorageContext, load_index_from_storage
+    
+    # Load the original language index
+    print(f"Loading index from {original_index_path}")
+    original_storage_context = StorageContext.from_defaults(persist_dir=original_index_path)
+    original_index = load_index_from_storage(original_storage_context)
+    original_query_engine = original_index.as_query_engine()
+    
+    # Load the translated index if available
+    translated_query_engine = None
+    if translated_index_path:
+        print(f"Loading translated index from {translated_index_path}")
+        translated_storage_context = StorageContext.from_defaults(persist_dir=translated_index_path)
+        translated_index = load_index_from_storage(translated_storage_context)
+        translated_query_engine = translated_index.as_query_engine()
+    
+    return {
+        "original": original_query_engine,
+        "translated": translated_query_engine
+    }

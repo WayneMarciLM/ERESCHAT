@@ -1,0 +1,251 @@
+#cell 1:
+
+import os
+os.environ["OPENAI_API_KEY"] = "redacted"
+
+#cell 2:
+
+from llama_index.llms.azure_openai import AzureOpenAI
+
+azure_llm = AzureOpenAI(
+    model="gpt-4o-2024-05-13",
+    engine="gpt-4o-2024-05-13",
+    api_key="redacted",
+    azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+    default_headers={"use-case": "ERES Lease Test"}
+)
+
+# Example usage
+response = azure_llm.complete("tell me a joke about roofs")
+print(response)
+
+#cell 3:
+
+import pandas as pd
+master_list_df = pd.read_excel("/mnt/N0312850/Lease/FAQ_Export/faq_sections.xlsx")
+
+# Handle NaN values in the 'text' column
+master_list_df['content'] = master_list_df['content'].fillna('')
+
+#cell 4:
+
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+from llama_index.legacy.embeddings.langchain import LangchainEmbedding
+import os
+
+# Assuming you have set your API key as an environment variable
+os.environ["CORTEX_API_TOKEN"] = "redacted"  # Secure your API keys appropriately
+
+llama_index_embeddings = LangchainEmbedding(
+    AzureOpenAIEmbeddings(
+        model="text-embedding-ada-002",
+        deployment="TEXT_EMBEDDING_ADA_002_V2",
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",  # Updated to use azure_endpoint
+        openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+        openai_api_type="azure",
+        openai_api_version="2023-09-01-preview",
+        chunk_size=1,
+    ),
+    embed_batch_size=1,
+)
+
+# error:
+
+ModuleNotFoundError                       Traceback (most recent call last)
+Cell In[4], line 2
+      1 from langchain_openai.embeddings import AzureOpenAIEmbeddings
+----> 2 from llama_index.legacy.embeddings.langchain import LangchainEmbedding
+      3 import os
+      5 # Assuming you have set your API key as an environment variable
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/__init__.py:25
+     21 from llama_index.legacy.embeddings import OpenAIEmbedding
+     23 # indices
+     24 # loading
+---> 25 from llama_index.legacy.indices import (
+     26     ComposableGraph,
+     27     DocumentSummaryIndex,
+     28     GPTDocumentSummaryIndex,
+     29     GPTKeywordTableIndex,
+     30     GPTKnowledgeGraphIndex,
+     31     GPTListIndex,
+     32     GPTRAKEKeywordTableIndex,
+     33     GPTSimpleKeywordTableIndex,
+     34     GPTTreeIndex,
+     35     GPTVectorStoreIndex,
+     36     KeywordTableIndex,
+     37     KnowledgeGraphIndex,
+     38     ListIndex,
+     39     RAKEKeywordTableIndex,
+     40     SimpleKeywordTableIndex,
+     41     SummaryIndex,
+     42     TreeIndex,
+     43     VectorStoreIndex,
+     44     load_graph_from_storage,
+     45     load_index_from_storage,
+     46     load_indices_from_storage,
+     47 )
+     49 # structured
+     50 from llama_index.legacy.indices.common.struct_store.base import (
+     51     SQLDocumentContextBuilder,
+     52 )
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/indices/__init__.py:4
+      1 """LlamaIndex data structures."""
+      3 # indices
+----> 4 from llama_index.legacy.indices.composability.graph import ComposableGraph
+      5 from llama_index.legacy.indices.document_summary import (
+      6     DocumentSummaryIndex,
+      7     GPTDocumentSummaryIndex,
+      8 )
+      9 from llama_index.legacy.indices.document_summary.base import DocumentSummaryIndex
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/indices/composability/__init__.py:3
+      1 """This module contains all classes used for composing graphs over indices."""
+----> 3 from llama_index.legacy.indices.composability.graph import ComposableGraph
+      5 __all__ = ["ComposableGraph"]
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/indices/composability/graph.py:7
+      5 from llama_index.legacy.core.base_query_engine import BaseQueryEngine
+      6 from llama_index.legacy.data_structs.data_structs import IndexStruct
+----> 7 from llama_index.legacy.indices.base import BaseIndex
+      8 from llama_index.legacy.schema import (
+      9     IndexNode,
+     10     NodeRelationship,
+     11     ObjectType,
+     12     RelatedNodeInfo,
+     13 )
+     14 from llama_index.legacy.service_context import ServiceContext
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/indices/base.py:7
+      4 from abc import ABC, abstractmethod
+      5 from typing import Any, Dict, Generic, List, Optional, Sequence, Type, TypeVar, cast
+----> 7 from llama_index.legacy.chat_engine.types import BaseChatEngine, ChatMode
+      8 from llama_index.legacy.core.base_query_engine import BaseQueryEngine
+      9 from llama_index.legacy.core.base_retriever import BaseRetriever
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/chat_engine/__init__.py:1
+----> 1 from llama_index.legacy.chat_engine.condense_plus_context import (
+      2     CondensePlusContextChatEngine,
+      3 )
+      4 from llama_index.legacy.chat_engine.condense_question import CondenseQuestionChatEngine
+      5 from llama_index.legacy.chat_engine.context import ContextChatEngine
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/chat_engine/condense_plus_context.py:7
+      4 from typing import Any, List, Optional, Tuple
+      6 from llama_index.legacy.callbacks import CallbackManager, trace_method
+----> 7 from llama_index.legacy.chat_engine.types import (
+      8     AgentChatResponse,
+      9     BaseChatEngine,
+     10     StreamingAgentChatResponse,
+     11     ToolOutput,
+     12 )
+     13 from llama_index.legacy.core.llms.types import ChatMessage, MessageRole
+     14 from llama_index.legacy.indices.base_retriever import BaseRetriever
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/chat_engine/types.py:16
+     10 from llama_index.legacy.core.llms.types import (
+     11     ChatMessage,
+     12     ChatResponseAsyncGen,
+     13     ChatResponseGen,
+     14 )
+     15 from llama_index.legacy.core.response.schema import Response, StreamingResponse
+---> 16 from llama_index.legacy.memory import BaseMemory
+     17 from llama_index.legacy.schema import NodeWithScore
+     18 from llama_index.legacy.tools import ToolOutput
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/memory/__init__.py:1
+----> 1 from llama_index.legacy.memory.chat_memory_buffer import ChatMemoryBuffer
+      2 from llama_index.legacy.memory.types import BaseMemory
+      4 __all__ = ["BaseMemory", "ChatMemoryBuffer"]
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/memory/chat_memory_buffer.py:9
+      7 from llama_index.legacy.llms.types import ChatMessage, MessageRole
+      8 from llama_index.legacy.memory.types import DEFAULT_CHAT_STORE_KEY, BaseMemory
+----> 9 from llama_index.legacy.storage.chat_store import BaseChatStore, SimpleChatStore
+     10 from llama_index.legacy.utils import get_tokenizer
+     12 DEFAULT_TOKEN_LIMIT_RATIO = 0.75
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/storage/__init__.py:3
+      1 """Storage classes."""
+----> 3 from llama_index.legacy.storage.storage_context import StorageContext
+      5 __all__ = [
+      6     "StorageContext",
+      7 ]
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/storage/storage_context.py:30
+     28 from llama_index.legacy.storage.index_store.types import BaseIndexStore
+     29 from llama_index.legacy.utils import concat_dirs
+---> 30 from llama_index.legacy.vector_stores.simple import (
+     31     DEFAULT_PERSIST_FNAME as VECTOR_STORE_FNAME,
+     32 )
+     33 from llama_index.legacy.vector_stores.simple import (
+     34     DEFAULT_VECTOR_STORE,
+     35     NAMESPACE_SEP,
+     36     SimpleVectorStore,
+     37 )
+     38 from llama_index.legacy.vector_stores.types import BasePydanticVectorStore, VectorStore
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/vector_stores/__init__.py:32
+     30 from llama_index.legacy.vector_stores.milvus import MilvusVectorStore
+     31 from llama_index.legacy.vector_stores.mongodb import MongoDBAtlasVectorSearch
+---> 32 from llama_index.legacy.vector_stores.myscale import MyScaleVectorStore
+     33 from llama_index.legacy.vector_stores.neo4jvector import Neo4jVectorStore
+     34 from llama_index.legacy.vector_stores.opensearch import (
+     35     OpensearchVectorClient,
+     36     OpensearchVectorStore,
+     37 )
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/vector_stores/myscale.py:11
+      8 import logging
+      9 from typing import Any, Dict, List, Optional, cast
+---> 11 from llama_index.legacy.readers.myscale import (
+     12     MyScaleSettings,
+     13     escape_str,
+     14     format_list_to_string,
+     15 )
+     16 from llama_index.legacy.schema import (
+     17     BaseNode,
+     18     MetadataMode,
+   (...)
+     21     TextNode,
+     22 )
+     23 from llama_index.legacy.service_context import ServiceContext
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/readers/__init__.py:20
+     18 from llama_index.legacy.readers.deeplake import DeepLakeReader
+     19 from llama_index.legacy.readers.discord_reader import DiscordReader
+---> 20 from llama_index.legacy.readers.download import download_loader
+     21 from llama_index.legacy.readers.elasticsearch import ElasticsearchReader
+     22 from llama_index.legacy.readers.faiss import FaissReader
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/readers/download.py:10
+      1 """Download loader from Llama Hub.
+      2 
+      3 NOTE: using `download_loader` is now deprecated.
+      4 Please do `pip install llama-hub` instead.
+      5 
+      6 """
+      8 from typing import Optional, Type
+---> 10 from llama_index.legacy.download.module import (
+     11     LLAMA_HUB_URL,
+     12     MODULE_TYPE,
+     13     download_llama_module,
+     14     track_download,
+     15 )
+     16 from llama_index.legacy.readers.base import BaseReader
+     19 def download_loader(
+     20     loader_class: str,
+     21     loader_hub_url: str = LLAMA_HUB_URL,
+   (...)
+     24     custom_path: Optional[str] = None,
+     25 ) -> Type[BaseReader]:
+
+File ~/.cache/pypoetry/virtualenvs/lease-2sUCJfKo-py3.10/lib/python3.10/site-packages/llama_index/legacy/download/module.py:13
+     10 from pathlib import Path
+     11 from typing import Any, Dict, List, Optional, Union
+---> 13 import pkg_resources
+     14 import requests
+     15 from pkg_resources import DistributionNotFound
+
+ModuleNotFoundError: No module named 'pkg_resources'

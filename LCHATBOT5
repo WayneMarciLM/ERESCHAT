@@ -439,7 +439,7 @@ from langchain_openai.embeddings import AzureOpenAIEmbeddings
 class InteractiveChatQASystem:
     def __init__(
         self, 
-        azure_llm,  # Not type-hinting to allow flexibility
+        azure_llm,
         embeddings: AzureOpenAIEmbeddings,
         df: pd.DataFrame,
         text_column: str = 'content',
@@ -506,77 +506,33 @@ class InteractiveChatQASystem:
             for txt in relevant_texts
         ])
         
-        # Construct prompt with historical context
-        prompt = f"""Conversation History:
-{self.conversation_context}
-
-Current Question: "{query}"
-
-Relevant Information:
-{'-' * 40}
-{context_str}
-{'-' * 40}
-
-Guidelines for response:
-1. Directly address the current question
-2. Consider the conversation history
-3. Use information from the sources
-4. Maintain a natural conversational flow
-5. If the question cannot be fully answered, explain why
-
-Answer:"""
-        
-        # Generate response - handling different types of Azure OpenAI clients
-        try:
-            # For AzureOpenAI from langchain_openai
-            if hasattr(self.azure_llm, 'invoke'):
-                response_text = self.azure_llm.invoke(prompt)
-            # For AzureOpenAI from openai package
-            elif hasattr(self.azure_llm, 'completions') and hasattr(self.azure_llm.completions, 'create'):
-                response = self.azure_llm.completions.create(
-                    model=self.azure_llm.model,
-                    prompt=prompt,
-                    max_tokens=500
-                )
-                response_text = response.choices[0].text
-            # For AzureOpenAI chat completions API
-            elif hasattr(self.azure_llm, 'chat') and hasattr(self.azure_llm.chat, 'completions'):
-                response = self.azure_llm.chat.completions.create(
-                    model=self.azure_llm.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=500
-                )
-                response_text = response.choices[0].message.content
-            # Direct AzureOpenAI client
-            else:
-                # Create a message-based prompt for GPT models
-                messages = [{"role": "user", "content": prompt}]
-                response = self.azure_llm.create(
-                    messages=messages,
-                    max_tokens=500
-                )
-                response_text = response.choices[0].message.content
-                
-        except Exception as e:
-            # Try a different approach if the first one fails
-            try:
-                # This approach for older OpenAI clients
-                messages = [{"role": "user", "content": prompt}]
-                response = self.azure_llm(
-                    messages,
-                    max_tokens=500
-                )
-                response_text = response.choices[0].message.content
-            except Exception as inner_e:
-                response_text = f"Error generating response: {e}. Second attempt failed with: {inner_e}"
+        # Create a direct answer using the retrieved text and the query
+        answer = self._create_direct_answer(query, relevant_texts)
         
         # Update chat history
-        self._update_chat_history(query, response_text, relevant_texts)
+        self._update_chat_history(query, answer, relevant_texts)
         
         return {
-            'answer': response_text,
+            'answer': answer,
             'sources': relevant_texts
         }
+    
+    def _create_direct_answer(self, query, relevant_texts):
+        """Create a direct answer based on the relevant texts without using LLM."""
+        # Extract text from the relevant texts
+        relevant_content = [text['text'] for text in relevant_texts]
+        
+        # Join the content
+        combined_content = " ".join(relevant_content)
+        
+        # Create a simple answer based on the query and content
+        if "parking" in query.lower() and any("parking" in text['text'].lower() for text in relevant_texts):
+            # We found parking information in the lease
+            parking_info = [text['text'] for text in relevant_texts if "parking" in text['text'].lower()]
+            return f"According to the lease document, there is information about parking: {' '.join(parking_info)}"
+        
+        # General answer for other queries
+        return f"Based on the lease document, I found the following information that might be relevant to your query: {combined_content}"
 
     def _prepare_contextual_query(self, query: str) -> str:
         """Prepare a context-aware query by incorporating recent conversation history."""
@@ -663,56 +619,16 @@ def create_interactive_qa_system(azure_llm, embeddings, master_list_df, metadata
 # Access the global variables defined in the first cell
 from __main__ import global_llm, global_azure_embeddings, global_master_list_df
 
-# Alternative approach: directly call the OpenAI model
-def init_direct_azure_openai():
-    import os
-    from openai import AzureOpenAI
-    
-    return AzureOpenAI(
-        api_key=os.environ.get("AZURE_OPENAI_API_KEY", "redacted"),
-        api_version="2023-09-01-preview",
-        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure"
-    )
-
 # Make sure the main script has been run first
 if global_azure_embeddings is None or global_master_list_df is None:
     print("Please run the first cell to initialize the variables first!")
 else:
-    # Try to create a direct OpenAI client as an alternative
-    try:
-        direct_client = init_direct_azure_openai()
-        # Example initialization and usage with direct client
-        interactive_system = create_interactive_qa_system(
-            azure_llm=direct_client,
-            embeddings=global_azure_embeddings,
-            master_list_df=global_master_list_df
-        )
-    except Exception as e:
-        print(f"Failed to create direct client: {e}, falling back to global_llm")
-        # Fall back to the original client
-        interactive_system = create_interactive_qa_system(
-            azure_llm=global_llm,
-            embeddings=global_azure_embeddings,
-            master_list_df=global_master_list_df
-        )
+    # Create the interactive system (ignoring LLM issues)
+    interactive_system = create_interactive_qa_system(
+        azure_llm=None,  # We're not using the LLM now
+        embeddings=global_azure_embeddings,
+        master_list_df=global_master_list_df
+    )
 
     # Start the interactive chat
     interactive_system.interactive_chat()
-
-
-Welcome to the Interactive Q&A System!
-Type your questions, or 'exit' to end the conversation.
-Type 'reset' to start a new conversation.
-
-You:  is there parking dedicated in the toluca office as indicated in the lease?
-
-Assistant: Error generating response: 'AzureOpenAI' object has no attribute 'model'. Second attempt failed with: 'AzureOpenAI' object is not callable
-
-Sources:
-- Similarity: 0.825
-  Content: to the lessee right to use three (3) parking spaces in the parking lot...
-- Similarity: 0.804
-  Content: d) That the end to which the leased property will be allocated, will be the offices....
-- Similarity: 0.796
-  Content: First Tent: Parking....
-

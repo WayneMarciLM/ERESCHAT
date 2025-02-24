@@ -1,3 +1,5 @@
+#cell 1:
+
 import os
 import re
 import uuid
@@ -270,10 +272,11 @@ def setup_azure_llm():
     """Set up Azure OpenAI LLM client"""
     return AzureOpenAI(
         model="gpt-4o-2024-05-13",
-        engine="gpt-4o-2024-05-13",
+        engine="gpt-4o-2024-05-13",  # This warning suggests 'engine' is deprecated or moved
         api_key="redacted",
         azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
-        default_headers={"use-case": "ERES Lease Test"}
+        default_headers={"use-case": "ERES Lease Test"},
+        api_version="2023-09-01-preview"  # Add the correct API version here
     )
 
 # Initialize embeddings for Llama Index
@@ -401,8 +404,250 @@ def main(pdf_path, output_dir, query=None):
 # Example usage
 if __name__ == "__main__":
     # Replace with your actual PDF path and output directory
-    pdf_file = "example.pdf"
-    output_folder = "output"
-    search_query = "Tell me about the Monterrey office and the parties and properties involved in that lease?."
+    pdf_file = '../Lease/leasedocs/tolucalease.pdf'
+    output_folder = '../Lease/leasedocs/translations'
+    search_query = "Tell me about the Toluca office and the parties and properties involved in that lease?."
     
     result_df = main(pdf_file, output_folder, search_query)
+
+
+print("LLM initialized:", llm)
+
+
+#error:
+
+NameError                                 Traceback (most recent call last)
+Cell In[4], line 412
+    407     search_query = "Tell me about the Toluca office and the parties and properties involved in that lease?."
+    409     result_df = main(pdf_file, output_folder, search_query)
+--> 412 print("LLM initialized:", llm)
+
+NameError: name 'llm' is not defined
+
+#Cell 2
+
+# Second cell: Interactive Chat with Processed Data
+
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Any
+from sklearn.metrics.pairwise import cosine_similarity
+from llama_index.llms.azure_openai import AzureOpenAI
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+
+class InteractiveChatQASystem:
+    def __init__(
+        self, 
+        azure_llm: AzureOpenAI, 
+        embeddings: AzureOpenAIEmbeddings,
+        df: pd.DataFrame,
+        text_column: str = 'content',
+        embedding_column: str = 'embedding',
+        metadata_fields: List[str] = None,
+        max_history: int = 5
+    ):
+        self.azure_llm = azure_llm
+        self.embeddings = embeddings
+        self.text_column = text_column
+        self.embedding_column = embedding_column
+        self.max_history = max_history
+        
+        # Prepare metadata fields
+        self.metadata_fields = metadata_fields or [
+            col for col in df.columns 
+            if col not in [text_column, embedding_column]
+        ]
+        
+        # Clean and prepare data
+        self.df = df.dropna(subset=[text_column, embedding_column])
+        self.embeddings_array = np.array(self.df[embedding_column].tolist())
+        
+        # Chat history management
+        self.reset_conversation()
+
+    def reset_conversation(self):
+        """Reset the conversation history."""
+        self.chat_history: List[Dict[str, str]] = []
+        self.conversation_context = ""
+        self.last_response = None
+
+    def get_similar_texts(self, query: str, top_n: int = 3) -> List[Dict]:
+        """Retrieve the most similar texts to the query."""
+        query_embedding = self.embeddings.embed_documents([query])[0]
+        
+        similarities = cosine_similarity(
+            np.array(query_embedding).reshape(1, -1),
+            self.embeddings_array
+        ).flatten()
+        
+        top_indices = np.argsort(similarities)[-top_n:][::-1]
+        
+        return [
+            {
+                'text': self.df.iloc[idx][self.text_column],
+                'metadata': {field: self.df.iloc[idx][field] for field in self.metadata_fields},
+                'similarity_score': float(similarities[idx])
+            }
+            for idx in top_indices
+        ]
+
+    def generate_answer(self, query: str) -> Dict[str, Any]:
+        """Generate a contextual answer with chat history awareness."""
+        # Prepare context-aware query
+        contextual_query = self._prepare_contextual_query(query)
+        
+        # Find similar texts
+        relevant_texts = self.get_similar_texts(contextual_query)
+        
+        # Prepare context for LLM
+        context_str = "\n\n".join([
+            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+            for txt in relevant_texts
+        ])
+        
+        # Construct prompt with historical context
+        prompt = f"""Conversation History:
+{self.conversation_context}
+
+Current Question: "{query}"
+
+Relevant Information:
+{'-' * 40}
+{context_str}
+{'-' * 40}
+
+Guidelines for response:
+1. Directly address the current question
+2. Consider the conversation history
+3. Use information from the sources
+4. Maintain a natural conversational flow
+5. If the question cannot be fully answered, explain why
+
+Answer:"""
+        
+        # Generate response
+        response = self.azure_llm.complete(prompt)
+        response_text = str(response)
+        
+        # Update chat history
+        self._update_chat_history(query, response_text, relevant_texts)
+        
+        return {
+            'answer': response_text,
+            'sources': relevant_texts
+        }
+
+    def _prepare_contextual_query(self, query: str) -> str:
+        """Prepare a context-aware query by incorporating recent conversation history."""
+        if self.chat_history:
+            # Create a summary of recent interactions
+            recent_context = " ".join([
+                f"{entry['role']}: {entry['text']}"
+                for entry in self.chat_history[-self.max_history:]
+            ])
+            return f"{recent_context}\n\nLatest Query: {query}"
+        return query
+
+    def _update_chat_history(self, query: str, response: str, sources: List[Dict]):
+        """Update chat history and conversation context."""
+        # Add current interaction to history
+        self.chat_history.append({
+            'role': 'user', 
+            'text': query
+        })
+        self.chat_history.append({
+            'role': 'assistant', 
+            'text': response
+        })
+        
+        # Maintain a reasonable history length
+        self.chat_history = self.chat_history[-self.max_history:]
+        
+        # Update conversation context
+        self.conversation_context = "\n".join([
+            f"{entry['role'].upper()}: {entry['text']}"
+            for entry in self.chat_history
+        ])
+        
+        # Store the last response for reference
+        self.last_response = response
+
+    def interactive_chat(self):
+        """
+        Interactive chat interface in the notebook.
+        Allows continuous questioning until the user chooses to exit.
+        """
+        print("Welcome to the Interactive Q&A System!")
+        print("Type your questions, or 'exit' to end the conversation.")
+        print("Type 'reset' to start a new conversation.")
+        
+        while True:
+            # Get user input
+            user_input = input("\nYou: ").strip()
+            
+            # Check for exit conditions
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+            
+            # Check for reset
+            if user_input.lower() == 'reset':
+                self.reset_conversation()
+                print("Conversation reset. Ready for a new discussion.")
+                continue
+            
+            # Generate and display answer
+            try:
+                result = self.generate_answer(user_input)
+                print("\nAssistant:", result['answer'])
+                
+                # Optionally display sources
+                print("\nSources:")
+                for source in result['sources']:
+                    print(f"- Similarity: {source['similarity_score']:.3f}")
+                    print(f"  Content: {source['text'][:200]}...")
+            
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+def create_interactive_qa_system(azure_llm, embeddings, master_list_df, metadata_fields=None):
+    """Factory function to create the interactive chat QA system."""
+    return InteractiveChatQASystem(
+        azure_llm=azure_llm,
+        embeddings=embeddings,
+        df=master_list_df,
+        metadata_fields=metadata_fields
+    )
+
+# Example initialization and usage
+interactive_system = create_interactive_qa_system(
+    azure_llm=llm,
+    embeddings=azure_embeddings,
+    master_list_df=master_list_df
+)
+
+# Start the interactive chat
+interactive_system.interactive_chat()
+
+
+#error:
+
+---------------------------------------------------------------------------
+NameError                                 Traceback (most recent call last)
+Cell In[3], line 196
+    187     return InteractiveChatQASystem(
+    188         azure_llm=azure_llm,
+    189         embeddings=embeddings,
+    190         df=master_list_df,
+    191         metadata_fields=metadata_fields
+    192     )
+    194 # Example initialization and usage
+    195 interactive_system = create_interactive_qa_system(
+--> 196     azure_llm=llm,
+    197     embeddings=azure_embeddings,
+    198     master_list_df=master_list_df
+    199 )
+    201 # Start the interactive chat
+    202 interactive_system.interactive_chat()
+
+NameError: name 'llm' is not defined

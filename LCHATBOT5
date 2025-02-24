@@ -654,3 +654,18 @@ else:
 
     # Start the interactive chat
     interactive_system.interactive_chat()
+
+
+You:  what is the rent for the toluca office?
+/tmp/ipykernel_3597/64191061.py:105: LangChainDeprecationWarning: The method `BaseLLM.predict` was deprecated in langchain-core 0.1.7 and will be removed in 1.0. Use :meth:`~invoke` instead.
+  response_text = self.azure_llm.predict(prompt)
+
+Assistant: Error generating response: Completions.create() got an unexpected keyword argument 'engine'
+
+Sources:
+- Similarity: 0.789
+  Content: of the Toluca trade, State of Mexico, under the electronic real folio 00103676 dated October 16,...
+- Similarity: 0.788
+  Content: d) That the end to which the leased property will be allocated, will be the offices....
+- Similarity: 0.785
+  Content: Real Avenida de Arcos 17 - Paseo de la Reforma Nimero 350 Floor 7a...

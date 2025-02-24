@@ -1,0 +1,408 @@
+import os
+import re
+import uuid
+import pandas as pd
+import time
+import numpy as np
+from PIL import Image
+import pytesseract
+from pdf2image import convert_from_path
+from langdetect import detect
+from deep_translator import GoogleTranslator
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+from langchain_openai import AzureOpenAI
+from llama_index.legacy.embeddings.langchain import LangchainEmbedding
+from sklearn.metrics.pairwise import cosine_similarity
+
+def extract_text_with_tesseract(pdf_path):
+    """
+    Extract text from a PDF file using Tesseract OCR.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        
+    Returns:
+        Extracted text from all pages
+    """
+    try:
+        # Convert PDF to images
+        images = convert_from_path(pdf_path)
+        
+        # Extract text from each page image
+        extracted_text = ""
+        for i, img in enumerate(images):
+            print(f"Processing page {i+1}/{len(images)}")
+            text = pytesseract.image_to_string(img)
+            extracted_text += text + "\n\n"
+            
+        return extracted_text
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        return ""
+
+def detect_language(text):
+    """Detect the language of the input text."""
+    try:
+        # Use a substantial chunk of text for more accurate detection
+        sample_text = text[:3000].replace('\n', ' ').strip()
+        return detect(sample_text)
+    except Exception as e:
+        print(f"Language detection error: {e}")
+        return "en"  # Default to English if detection fails
+
+def translate_text(text, source_lang="auto", target_lang="en"):
+    """Translate text to the target language."""
+    try:
+        if not text.strip():
+            return ""
+            
+        # Handle long texts by breaking them into chunks
+        max_chunk_size = 4000  # Safe limit for GoogleTranslator
+        result = ""
+        
+        # Process text in chunks
+        for i in range(0, len(text), max_chunk_size):
+            chunk = text[i:i + max_chunk_size]
+            if chunk.strip():  # Only translate non-empty chunks
+                translated_chunk = GoogleTranslator(source=source_lang, target=target_lang).translate(chunk)
+                result += translated_chunk + " "
+                print(f"Translated chunk {i//max_chunk_size + 1}")
+            
+        return result.strip()
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return text  # Return original text if translation fails
+
+def process_document(pdf_path, output_dir):
+    """Process PDF: extract with Tesseract, detect language, translate, and save."""
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Extract text using Tesseract
+    print("Extracting text with Tesseract OCR...")
+    original_text = extract_text_with_tesseract(pdf_path)
+    
+    if not original_text.strip():
+        print("Warning: No text extracted from the document")
+        return None
+    
+    # Get filename without extension
+    base_filename = os.path.splitext(os.path.basename(pdf_path))[0]
+    
+    # Detect language
+    print("Detecting language...")
+    detected_lang = detect_language(original_text)
+    print(f"Detected language: {detected_lang}")
+    
+    # Save original text
+    original_path = os.path.join(output_dir, f"{base_filename}_original_{detected_lang}.txt")
+    with open(original_path, 'w', encoding='utf-8') as f:
+        f.write(original_text)
+    print(f"Original text saved to: {original_path}")
+    
+    # Translate if not already English
+    if detected_lang != 'en':
+        print(f"Translating from {detected_lang} to English...")
+        translated_text = translate_text(original_text, source_lang=detected_lang, target_lang='en')
+        translated_path = os.path.join(output_dir, f"{base_filename}_translated_en.txt")
+        with open(translated_path, 'w', encoding='utf-8') as f:
+            f.write(translated_text)
+        print(f"Translated text saved to: {translated_path}")
+    else:
+        print("Document already in English, skipping translation")
+        translated_text = original_text
+        translated_path = original_path
+    
+    return {
+        'original_path': original_path,
+        'translated_path': translated_path,
+        'language': detected_lang,
+        'original_text': original_text,
+        'translated_text': translated_text
+    }
+
+def create_indexed_sections(text, section_patterns=None):
+    """
+    Index lines of text and identify sections.
+    
+    Args:
+        text: The text to process
+        section_patterns: List of regex patterns to identify section headers
+    
+    Returns:
+        DataFrame with indexed lines and section information
+    """
+    # Default section patterns if none provided
+    if section_patterns is None:
+        section_patterns = [
+            r'^#+\s+(.+)$',                # Markdown headers
+            r'^(\d+\.(?:\d+\.)*\s+.+)$',   # Numbered sections (1., 1.1., etc)
+            r'^([A-Z][A-Z\s]+:?)$',        # ALL CAPS sections
+            r'^(Article\s+\d+[.:])(?:\s+|$)',  # Article sections
+            r'^(Section\s+\d+[.:])(?:\s+|$)',  # Section headers
+            r'^(CHAPTER\s+[IVX0-9]+)(?:\s+|$)' # Chapter headers (Roman or Arabic)
+        ]
+    
+    # Split text into lines and create initial dataframe
+    lines = text.split('\n')
+    df = pd.DataFrame({
+        'line_idx': range(len(lines)),
+        'content': lines
+    })
+    
+    # Remove empty lines
+    df = df[df['content'].str.strip() != '']
+    df = df.reset_index(drop=True)
+    
+    if len(df) == 0:
+        print("Warning: No content found after removing empty lines")
+        # Create minimal structure to prevent errors
+        return pd.DataFrame({
+            'line_idx': [0],
+            'content': ["NO CONTENT EXTRACTED"],
+            'section': ["DOCUMENT"],
+            'section_level': [0],
+            'is_section_header': [True],
+            'id': [str(uuid.uuid4())]
+        })
+    
+    # Identify sections
+    current_section = "INTRODUCTION"
+    sections = []
+    section_levels = []
+    
+    for idx, line in df.iterrows():
+        is_section_header = False
+        level = None
+        
+        for pattern in section_patterns:
+            if re.match(pattern, line['content'].strip()):
+                current_section = line['content'].strip()
+                is_section_header = True
+                
+                # Determine section level
+                if line['content'].startswith('#'):
+                    level = len(re.match(r'^(#+)', line['content']).group(1))
+                elif re.match(r'^\d+\.\d+\.\d+', line['content']):
+                    level = 3
+                elif re.match(r'^\d+\.\d+', line['content']):
+                    level = 2
+                elif re.match(r'^\d+\.', line['content']):
+                    level = 1
+                else:
+                    level = 1
+                break
+        
+        sections.append(current_section)
+        section_levels.append(level)
+    
+    df['section'] = sections
+    df['section_level'] = section_levels
+    df['is_section_header'] = [level is not None for level in section_levels]
+    
+    # Generate unique IDs for each entry
+    df['id'] = [str(uuid.uuid4()) for _ in range(len(df))]
+    
+    return df
+
+def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
+    """
+    Complete pipeline to:
+    1. Extract text from PDF using Tesseract OCR
+    2. Detect language
+    3. Translate if needed
+    4. Index and identify sections
+    5. Save processed data
+    """
+    print(f"Processing document: {pdf_path}")
+    
+    # Process the document
+    doc_info = process_document(pdf_path, output_dir)
+    
+    if doc_info is None:
+        print("Document processing failed - no text extracted")
+        return None, None
+    
+    print("Creating indexed sections for original text...")
+    # Create indexed sections for original text
+    original_df = create_indexed_sections(
+        doc_info['original_text'],
+        section_patterns=section_patterns
+    )
+    original_df['language'] = doc_info['language']
+    original_df['is_translated'] = False
+    
+    # Save indexed original text
+    original_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_original_indexed.xlsx")
+    original_df.to_excel(original_excel_path, index=False)
+    print(f"Original indexed text saved to: {original_excel_path}")
+    
+    # Create indexed sections for translated text (if different from original)
+    if doc_info['language'] != 'en':
+        print("Creating indexed sections for translated text...")
+        translated_df = create_indexed_sections(
+            doc_info['translated_text'],
+            section_patterns=section_patterns
+        )
+        translated_df['language'] = 'en'
+        translated_df['is_translated'] = True
+        
+        # Save translated dataframe
+        translated_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_translated_indexed.xlsx")
+        translated_df.to_excel(translated_excel_path, index=False)
+        print(f"Translated indexed text saved to: {translated_excel_path}")
+        
+        return original_df, translated_df
+    else:
+        print("Document already in English, no separate translated index needed")
+        return original_df, None
+
+# Set environment variables for API keys
+def setup_environment_variables():
+    """Set up necessary environment variables for API access"""
+    # You can replace these with your actual API keys
+    os.environ["OPENAI_API_KEY"] = "redacted"
+    os.environ["CORTEX_API_TOKEN"] = "redacted"
+    os.environ["AZURE_OPENAI_API_KEY"] = "redacted"
+
+# Initialize Azure OpenAI LLM client
+def setup_azure_llm():
+    """Set up Azure OpenAI LLM client"""
+    return AzureOpenAI(
+        model="gpt-4o-2024-05-13",
+        engine="gpt-4o-2024-05-13",
+        api_key="redacted",
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+        default_headers={"use-case": "ERES Lease Test"}
+    )
+
+# Initialize embeddings for Llama Index
+def setup_llama_index_embeddings():
+    """Set up embeddings for Llama Index"""
+    return LangchainEmbedding(
+        AzureOpenAIEmbeddings(
+            model="text-embedding-ada-002",
+            deployment="TEXT_EMBEDDING_ADA_002_V2",
+            azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+            openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+            openai_api_type="azure",
+            openai_api_version="2023-09-01-preview",
+            chunk_size=1,
+        ),
+        embed_batch_size=1,
+    )
+
+# Initialize Azure OpenAI Embeddings directly
+def setup_azure_embeddings():
+    """Set up Azure OpenAI Embeddings"""
+    return AzureOpenAIEmbeddings(
+        model="text-embedding-ada-002",
+        deployment="text-embedding-ada-002-v2",
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+        openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+        openai_api_type="azure",
+        openai_api_version="2023-09-01-preview",
+        default_headers={"use-case": "ERES Lease Test"},
+        chunk_size=1,
+    )
+
+# Function to embed text with rate limiting
+def embed_text_list(text_list, embeddings):
+    """
+    Embed a list of texts with rate limiting
+    
+    Args:
+        text_list: List of texts to embed
+        embeddings: Initialized embeddings object
+        
+    Returns:
+        List of embedded texts
+    """
+    embedded_texts = []
+    for text in text_list:
+        embedded_text = embeddings.embed_documents([text])[0]
+        embedded_texts.append(embedded_text)
+        time.sleep(2)  # Adding delay to avoid rate limit
+    return embedded_texts
+
+# Function to find similar texts
+def get_similar_texts(query, df, embeddings, embedding_column='embedding', top_n=5):
+    """
+    Find texts similar to a query using embeddings
+    
+    Args:
+        query: Query text
+        df: DataFrame containing texts and embeddings
+        embeddings: Initialized embeddings object
+        embedding_column: Column name containing embeddings
+        top_n: Number of similar texts to return
+        
+    Returns:
+        DataFrame with similar texts
+    """
+    # Create embedding for the query
+    query_embedding = embeddings.embed_documents([query])[0]
+    
+    # Calculate cosine similarities
+    similarities = cosine_similarity(
+        np.array(query_embedding).reshape(1, -1),
+        np.array(df[embedding_column].tolist())
+    )
+    
+    # Find the indices of the top_n most similar texts
+    top_indices = np.argsort(similarities.flatten())[-top_n:][::-1]
+    
+    # Retrieve the corresponding texts
+    return df.iloc[top_indices]
+
+# Main function to tie everything together
+def main(pdf_path, output_dir, query=None):
+    """
+    Main function to process a PDF document and perform embedding-based search
+    
+    Args:
+        pdf_path: Path to the PDF document
+        output_dir: Directory to save output files
+        query: Optional query for similarity search
+    """
+    # Set up environment variables and clients
+    setup_environment_variables()
+    llm = setup_azure_llm()
+    llama_embeddings = setup_llama_index_embeddings()
+    azure_embeddings = setup_azure_embeddings()
+    
+    # Process the document
+    original_df, translated_df = process_multilingual_document(pdf_path, output_dir)
+    
+    # Use the appropriate DataFrame for embeddings (translated if available, otherwise original)
+    master_list_df = translated_df if translated_df is not None else original_df
+    
+    if master_list_df is not None:
+        # Add embeddings to the DataFrame
+        print("Creating embeddings for the processed text...")
+        master_list_df['embedding'] = embed_text_list(master_list_df['content'].tolist(), azure_embeddings)
+        
+        # Save the DataFrame with embeddings
+        embedding_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_with_embeddings.pkl")
+        master_list_df.to_pickle(embedding_path)
+        print(f"DataFrame with embeddings saved to: {embedding_path}")
+        
+        # Perform similarity search if a query is provided
+        if query:
+            print(f"Searching for content similar to: '{query}'")
+            similar_texts = get_similar_texts(query, master_list_df, azure_embeddings)
+            print("\nSimilar texts found:")
+            for i, (_, row) in enumerate(similar_texts.iterrows()):
+                print(f"\n--- Match {i+1} ---")
+                print(row['content'])
+    
+    return master_list_df
+
+# Example usage
+if __name__ == "__main__":
+    # Replace with your actual PDF path and output directory
+    pdf_file = "example.pdf"
+    output_folder = "output"
+    search_query = "Tell me about the Monterrey office and the parties and properties involved in that lease?."
+    
+    result_df = main(pdf_file, output_folder, search_query)

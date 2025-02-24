@@ -27,7 +27,7 @@ def setup_azure_llm():
 def setup_azure_embeddings():
     return AzureOpenAIEmbeddings(
         model="text-embedding-ada-002",
-        deployment="text-embedding-ada-002",  # Ensure this matches your working configuration
+        deployment="your-deployment-name",  # <-- UPDATE THIS: Replace with your actual Azure deployment name
         azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",  # Update with your actual endpoint
         openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
         openai_api_type="azure",
@@ -236,7 +236,3 @@ interactive_system = create_interactive_qa_system(
 )
 
 interactive_system.interactive_chat()
-
-
-You:  For the lease in Toluca, can you give me the active dates for that property?
-An error occurred: Error code: 400 - {'error': {'message': '{\r\n  "supplied_data": "text-embedding-ada-002",\r\n  "error_reason": "The supplied model deployment name is not supported, see the more_info_link for information on what is currently supported.",\r\n  "error_code": "UNSUPPORTED_OPENAI_MODEL_DEPLOYMENT",\r\n  "more_info_link": "https://libertymutual.atlassian.net/wiki/spaces/LGPTD/pages/1036791902/Errors"\r\n}', 'code': 400}}

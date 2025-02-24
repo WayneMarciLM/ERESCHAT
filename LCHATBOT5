@@ -527,9 +527,26 @@ Guidelines for response:
 
 Answer:"""
         
-        # Generate response
-        response = self.azure_llm.complete(prompt)
-        response_text = str(response)
+        # Generate response - using the correct method for the LLM
+        try:
+            # Try different methods based on LLM interface
+            if hasattr(self.azure_llm, 'complete'):
+                response = self.azure_llm.complete(prompt)
+                response_text = str(response)
+            elif hasattr(self.azure_llm, 'predict'):
+                response_text = self.azure_llm.predict(prompt)
+            elif hasattr(self.azure_llm, 'invoke'):
+                response_text = self.azure_llm.invoke(prompt)
+            elif hasattr(self.azure_llm, 'completion'):
+                response = self.azure_llm.completion(prompt)
+                response_text = str(response)
+            else:
+                # Fallback to AzureOpenAI's specific interface for completion
+                messages = [{"role": "user", "content": prompt}]
+                response = self.azure_llm.create(messages=messages)
+                response_text = response.choices[0].message.content
+        except Exception as e:
+            response_text = f"Error generating response: {e}"
         
         # Update chat history
         self._update_chat_history(query, response_text, relevant_texts)

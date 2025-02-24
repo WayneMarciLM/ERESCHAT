@@ -698,3 +698,21 @@ else:
 
     # Start the interactive chat
     interactive_system.interactive_chat()
+
+
+Welcome to the Interactive Q&A System!
+Type your questions, or 'exit' to end the conversation.
+Type 'reset' to start a new conversation.
+
+You:  is there parking dedicated in the toluca office as indicated in the lease?
+
+Assistant: Error generating response: 'AzureOpenAI' object has no attribute 'model'. Second attempt failed with: 'AzureOpenAI' object is not callable
+
+Sources:
+- Similarity: 0.825
+  Content: to the lessee right to use three (3) parking spaces in the parking lot...
+- Similarity: 0.804
+  Content: d) That the end to which the leased property will be allocated, will be the offices....
+- Similarity: 0.796
+  Content: First Tent: Parking....
+

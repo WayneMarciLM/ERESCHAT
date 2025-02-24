@@ -434,13 +434,12 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Any
 from sklearn.metrics.pairwise import cosine_similarity
-from llama_index.llms.azure_openai import AzureOpenAI
 from langchain_openai.embeddings import AzureOpenAIEmbeddings
 
 class InteractiveChatQASystem:
     def __init__(
         self, 
-        azure_llm: AzureOpenAI, 
+        azure_llm,  # Not type-hinting to allow flexibility
         embeddings: AzureOpenAIEmbeddings,
         df: pd.DataFrame,
         text_column: str = 'content',
@@ -527,26 +526,49 @@ Guidelines for response:
 
 Answer:"""
         
-        # Generate response - using the correct method for the LLM
+        # Generate response - handling different types of Azure OpenAI clients
         try:
-            # Try different methods based on LLM interface
-            if hasattr(self.azure_llm, 'complete'):
-                response = self.azure_llm.complete(prompt)
-                response_text = str(response)
-            elif hasattr(self.azure_llm, 'predict'):
-                response_text = self.azure_llm.predict(prompt)
-            elif hasattr(self.azure_llm, 'invoke'):
+            # For AzureOpenAI from langchain_openai
+            if hasattr(self.azure_llm, 'invoke'):
                 response_text = self.azure_llm.invoke(prompt)
-            elif hasattr(self.azure_llm, 'completion'):
-                response = self.azure_llm.completion(prompt)
-                response_text = str(response)
-            else:
-                # Fallback to AzureOpenAI's specific interface for completion
-                messages = [{"role": "user", "content": prompt}]
-                response = self.azure_llm.create(messages=messages)
+            # For AzureOpenAI from openai package
+            elif hasattr(self.azure_llm, 'completions') and hasattr(self.azure_llm.completions, 'create'):
+                response = self.azure_llm.completions.create(
+                    model=self.azure_llm.model,
+                    prompt=prompt,
+                    max_tokens=500
+                )
+                response_text = response.choices[0].text
+            # For AzureOpenAI chat completions API
+            elif hasattr(self.azure_llm, 'chat') and hasattr(self.azure_llm.chat, 'completions'):
+                response = self.azure_llm.chat.completions.create(
+                    model=self.azure_llm.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=500
+                )
                 response_text = response.choices[0].message.content
+            # Direct AzureOpenAI client
+            else:
+                # Create a message-based prompt for GPT models
+                messages = [{"role": "user", "content": prompt}]
+                response = self.azure_llm.create(
+                    messages=messages,
+                    max_tokens=500
+                )
+                response_text = response.choices[0].message.content
+                
         except Exception as e:
-            response_text = f"Error generating response: {e}"
+            # Try a different approach if the first one fails
+            try:
+                # This approach for older OpenAI clients
+                messages = [{"role": "user", "content": prompt}]
+                response = self.azure_llm(
+                    messages,
+                    max_tokens=500
+                )
+                response_text = response.choices[0].message.content
+            except Exception as inner_e:
+                response_text = f"Error generating response: {e}. Second attempt failed with: {inner_e}"
         
         # Update chat history
         self._update_chat_history(query, response_text, relevant_texts)
@@ -641,31 +663,38 @@ def create_interactive_qa_system(azure_llm, embeddings, master_list_df, metadata
 # Access the global variables defined in the first cell
 from __main__ import global_llm, global_azure_embeddings, global_master_list_df
 
+# Alternative approach: directly call the OpenAI model
+def init_direct_azure_openai():
+    import os
+    from openai import AzureOpenAI
+    
+    return AzureOpenAI(
+        api_key=os.environ.get("AZURE_OPENAI_API_KEY", "redacted"),
+        api_version="2023-09-01-preview",
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure"
+    )
+
 # Make sure the main script has been run first
-if global_llm is None or global_azure_embeddings is None or global_master_list_df is None:
+if global_azure_embeddings is None or global_master_list_df is None:
     print("Please run the first cell to initialize the variables first!")
 else:
-    # Example initialization and usage
-    interactive_system = create_interactive_qa_system(
-        azure_llm=global_llm,
-        embeddings=global_azure_embeddings,
-        master_list_df=global_master_list_df
-    )
+    # Try to create a direct OpenAI client as an alternative
+    try:
+        direct_client = init_direct_azure_openai()
+        # Example initialization and usage with direct client
+        interactive_system = create_interactive_qa_system(
+            azure_llm=direct_client,
+            embeddings=global_azure_embeddings,
+            master_list_df=global_master_list_df
+        )
+    except Exception as e:
+        print(f"Failed to create direct client: {e}, falling back to global_llm")
+        # Fall back to the original client
+        interactive_system = create_interactive_qa_system(
+            azure_llm=global_llm,
+            embeddings=global_azure_embeddings,
+            master_list_df=global_master_list_df
+        )
 
     # Start the interactive chat
     interactive_system.interactive_chat()
-
-
-You:  what is the rent for the toluca office?
-/tmp/ipykernel_3597/64191061.py:105: LangChainDeprecationWarning: The method `BaseLLM.predict` was deprecated in langchain-core 0.1.7 and will be removed in 1.0. Use :meth:`~invoke` instead.
-  response_text = self.azure_llm.predict(prompt)
-
-Assistant: Error generating response: Completions.create() got an unexpected keyword argument 'engine'
-
-Sources:
-- Similarity: 0.789
-  Content: of the Toluca trade, State of Mexico, under the electronic real folio 00103676 dated October 16,...
-- Similarity: 0.788
-  Content: d) That the end to which the leased property will be allocated, will be the offices....
-- Similarity: 0.785
-  Content: Real Avenida de Arcos 17 - Paseo de la Reforma Nimero 350 Floor 7a...

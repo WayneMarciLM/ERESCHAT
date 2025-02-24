@@ -1,0 +1,238 @@
+import os
+import time
+import numpy as np
+import pandas as pd
+from langchain_openai import AzureOpenAI
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Dict, Any
+
+# Setup environment variables
+def setup_environment():
+    os.environ["OPENAI_API_KEY"] = "redacted"
+    os.environ["CORTEX_API_TOKEN"] = "redacted"
+    os.environ["AZURE_OPENAI_API_KEY"] = "redacted"
+
+# Initialize LLM with the necessary parameters
+def setup_azure_llm():
+    return AzureOpenAI(
+        model="gpt-4",  # Ensure you use the correct model name
+        api_key=os.environ["OPENAI_API_KEY"],
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",  # Update with your actual endpoint
+        default_headers={"use-case": "ERES Lease Test"},
+        api_version="2023-09-01-preview"  # Confirm the correct API version
+    )
+
+# Initialize embeddings
+def setup_azure_embeddings():
+    return AzureOpenAIEmbeddings(
+        model="text-embedding-ada-002",
+        deployment="text-embedding-ada-002",  # Ensure this matches your working configuration
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",  # Update with your actual endpoint
+        openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+        openai_api_type="azure",
+        openai_api_version="2023-09-01-preview",
+        default_headers={"use-case": "ERES Lease Test"},
+        chunk_size=1,
+    )
+
+# Embed text list
+def embed_text_list(text_list, embeddings):
+    embedded_texts = []
+    for text in text_list:
+        embedded_text = embeddings.embed_documents([text])[0]
+        embedded_texts.append(embedded_text)
+        time.sleep(2)  # Adding delay to avoid rate limit
+    return embedded_texts
+
+# Function to find similar texts
+def get_similar_texts(query, df, embeddings, embedding_column='embedding', top_n=5):
+    query_embedding = embeddings.embed_documents([query])[0]
+    similarities = cosine_similarity(
+        np.array(query_embedding).reshape(1, -1),
+        np.array(df[embedding_column].tolist())
+    )
+    top_indices = np.argsort(similarities.flatten())[-top_n:][::-1]
+    return df.iloc[top_indices]
+
+class InteractiveChatQASystem:
+    def __init__(
+        self, 
+        azure_llm,
+        embeddings: AzureOpenAIEmbeddings,
+        df: pd.DataFrame,
+        text_column: str = 'content',
+        embedding_column: str = 'embedding',
+        metadata_fields: List[str] = None,
+        max_history: int = 5
+    ):
+        self.azure_llm = azure_llm
+        self.embeddings = embeddings
+        self.text_column = text_column
+        self.embedding_column = embedding_column
+        self.max_history = max_history
+
+        self.metadata_fields = metadata_fields or [
+            col for col in df.columns 
+            if col not in [text_column, embedding_column]
+        ]
+
+        self.df = df.dropna(subset=[text_column, embedding_column])
+        self.embeddings_array = np.array(self.df[embedding_column].tolist())
+        self.reset_conversation()
+
+    def reset_conversation(self):
+        self.chat_history: List[Dict[str, str]] = []
+        self.conversation_context = ""
+        self.last_response = None
+
+    def get_similar_texts(self, query: str, top_n: int = 3) -> List[Dict]:
+        query_embedding = self.embeddings.embed_documents([query])[0]
+        similarities = cosine_similarity(
+            np.array(query_embedding).reshape(1, -1),
+            self.embeddings_array
+        ).flatten()
+        top_indices = np.argsort(similarities)[-top_n:][::-1]
+        return [
+            {
+                'text': self.df.iloc[idx][self.text_column],
+                'metadata': {field: self.df.iloc[idx][field] for field in self.metadata_fields},
+                'similarity_score': float(similarities[idx])
+            }
+            for idx in top_indices
+        ]
+
+    def generate_answer(self, query: str) -> Dict[str, Any]:
+        """Generate a contextual answer with chat history awareness."""
+        contextual_query = self._prepare_contextual_query(query)
+        relevant_texts = self.get_similar_texts(contextual_query)
+
+        context_str = "\n\n".join([
+            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+            for txt in relevant_texts
+        ])
+
+        prompt = f"""Conversation History:
+{self.conversation_context}
+
+Current Question: "{query}"
+
+Relevant Information:
+{'-' * 40}
+{context_str}
+{'-' * 40}
+
+Guidelines for response:
+1. Directly address the current question
+2. Consider the conversation history
+3. Use information from the sources
+4. Maintain a natural conversational flow
+5. If the question cannot be fully answered, explain why
+
+Answer:"""
+
+        response_text = ""
+
+        try:
+            # Use the invoke method, if available
+            if hasattr(self.azure_llm, 'invoke'):
+                response = self.azure_llm.invoke(prompt=prompt)
+                response_text = response if isinstance(response, str) else response.get('choices', [{}])[0].get('text', '').strip()
+            # Fallback to using the complete method if available
+            elif hasattr(self.azure_llm, 'complete'):
+                response = self.azure_llm.complete(prompt=prompt)
+                response_text = response if isinstance(response, str) else response.get('choices', [{}])[0].get('text', '').strip()
+            # Another fallback, use call or __call__ method if the above are not found
+            elif callable(self.azure_llm):
+                response = self.azure_llm(prompt)
+                response_text = response if isinstance(response, str) else response.get('choices', [{}])[0].get('text', '').strip()
+            else:
+                raise AttributeError("No compatible method found on the AzureOpenAI object for generating responses.")
+        except Exception as e:
+            print(f"An error occurred while generating the answer: {e}")
+
+        self._update_chat_history(query, response_text, relevant_texts)
+
+        return {
+            'answer': response_text,
+            'sources': relevant_texts
+        }
+
+    def _prepare_contextual_query(self, query: str) -> str:
+        if self.chat_history:
+            recent_context = " ".join([
+                f"{entry['role']}: {entry['text']}"
+                for entry in self.chat_history[-self.max_history:]
+            ])
+            return f"{recent_context}\n\nLatest Query: {query}"
+        return query
+
+    def _update_chat_history(self, query: str, response: str, sources: List[Dict]):
+        self.chat_history.append({
+            'role': 'user', 
+            'text': query
+        })
+        self.chat_history.append({
+            'role': 'assistant', 
+            'text': response
+        })
+
+        self.chat_history = self.chat_history[-self.max_history:]
+
+        self.conversation_context = "\n".join([
+            f"{entry['role'].upper()}: {entry['text']}"
+            for entry in self.chat_history
+        ])
+
+        self.last_response = response
+
+    def interactive_chat(self):
+        print("Welcome to the Interactive Q&A System!")
+        print("Type your questions, or 'exit' to end the conversation.")
+        print("Type 'reset' to start a new conversation.")
+        
+        while True:
+            user_input = input("\nYou: ").strip()
+
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+
+            if user_input.lower() == 'reset':
+                self.reset_conversation()
+                print("Conversation reset. Ready for a new discussion.")
+                continue
+
+            try:
+                result = self.generate_answer(user_input)
+                print("\nAssistant:", result['answer'])
+                
+                print("\nSources:")
+                for source in result['sources']:
+                    print(f"- Similarity: {source['similarity_score']:.3f}")
+                    print(f"  Content: {source['text'][:200]}...")
+            
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+def create_interactive_qa_system(azure_llm, embeddings, master_list_df, metadata_fields=None):
+    return InteractiveChatQASystem(
+        azure_llm=azure_llm,
+        embeddings=embeddings,
+        df=master_list_df,
+        metadata_fields=metadata_fields
+    )
+
+# Main script execution
+setup_environment()
+llm = setup_azure_llm()
+embeddings = setup_azure_embeddings()
+
+# Assuming master_list_df has been created and populated correctly
+interactive_system = create_interactive_qa_system(
+    azure_llm=llm,
+    embeddings=embeddings,
+    master_list_df=global_master_list_df
+)
+
+interactive_system.interactive_chat()

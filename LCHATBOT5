@@ -723,42 +723,93 @@ class InteractiveChatQASystem:
         }
     
     def _create_direct_answer(self, query, relevant_texts):
-        """Create an answer using the LLM based on the relevant texts."""
+        """Create a more contextual answer without relying on specific LLM implementation."""
         # Extract text from the relevant texts
         relevant_content = [text['text'] for text in relevant_texts]
         
         # Join the content
         combined_content = "\n\n".join(relevant_content)
         
-        # Create a prompt for the LLM
-        prompt = f"""
-        Based on the following information from a lease document, please answer the question.
+        # Create more targeted responses based on query keywords
+        query_lower = query.lower()
         
-        QUESTION: {query}
-        
-        RELEVANT INFORMATION:
-        {combined_content}
-        
-        ANSWER:
-        """
-        
-        # Use the LLM to generate a response
+        # Try to use the LLM if available, with multiple fallback options
         if self.azure_llm:
             try:
-                response = self.azure_llm.predict(prompt)
-                return response
+                # Create a prompt for the LLM
+                prompt = f"""
+                Based on the following information from a lease document, please answer the question.
+                
+                QUESTION: {query}
+                
+                RELEVANT INFORMATION:
+                {combined_content}
+                
+                ANSWER:
+                """
+                
+                # Try different methods to handle various Azure OpenAI SDK versions
+                try:
+                    # First try predict method (common in newer LangChain wrappers)
+                    response = self.azure_llm.predict(prompt)
+                    return response
+                except (AttributeError, TypeError):
+                    try:
+                        # Try the complete method
+                        response = self.azure_llm.complete(prompt=prompt)
+                        return response
+                    except (AttributeError, TypeError):
+                        try:
+                            # Try the older completion method
+                            response = self.azure_llm.completion(prompt=prompt)
+                            return response
+                        except (AttributeError, TypeError):
+                            # Try direct call pattern for OpenAI client
+                            response = self.azure_llm(prompt)
+                            if isinstance(response, dict) and 'choices' in response:
+                                return response['choices'][0]['text'].strip()
+                            elif isinstance(response, str):
+                                return response.strip()
+                            else:
+                                # Unexpected response format, fall through to rule-based
+                                raise ValueError("Unexpected response format from LLM")
             except Exception as e:
                 print(f"Error using LLM: {e}")
-                # Fall back to simple response if LLM fails
+                # Fall back to rule-based approach
         
-        # Fallback or if LLM is not available - make this more query-specific
-        if "parking" in query.lower() and any("parking" in text['text'].lower() for text in relevant_texts):
-            # We found parking information in the lease
+        # Rule-based approach as fallback
+        # Different response templates based on query content
+        if "parking" in query_lower:
             parking_info = [text['text'] for text in relevant_texts if "parking" in text['text'].lower()]
-            return f"According to the lease document, there is information about parking: {' '.join(parking_info)}"
-        else:
-            # Try to make response somewhat related to the query
-            return f"Based on the lease document, I found relevant information that might answer your query about '{query}': {combined_content[:500]}..."
+            if parking_info:
+                return f"According to the lease document, here's information about parking: {' '.join(parking_info)}"
+        
+        if "rent" in query_lower or "payment" in query_lower:
+            rent_info = [text['text'] for text in relevant_texts if any(term in text['text'].lower() for term in ["rent", "payment", "$", "dollar", "monthly"])]
+            if rent_info:
+                return f"Regarding your question about rent/payment, the lease states: {' '.join(rent_info)}"
+        
+        if "pet" in query_lower or "animal" in query_lower:
+            pet_info = [text['text'] for text in relevant_texts if any(term in text['text'].lower() for term in ["pet", "dog", "cat", "animal"])]
+            if pet_info:
+                return f"About your pet policy question, I found this information: {' '.join(pet_info)}"
+                
+        if "term" in query_lower or "duration" in query_lower or "length" in query_lower:
+            term_info = [text['text'] for text in relevant_texts if any(term in text['text'].lower() for term in ["term", "duration", "period", "month", "year"])]
+            if term_info:
+                return f"Regarding the lease term/duration you asked about: {' '.join(term_info)}"
+                
+        if "deposit" in query_lower or "security" in query_lower:
+            deposit_info = [text['text'] for text in relevant_texts if any(term in text['text'].lower() for term in ["deposit", "security", "refundable"])]
+            if deposit_info:
+                return f"About the security deposit you inquired about: {' '.join(deposit_info)}"
+        
+        # Extract query key terms for more specific generic responses
+        query_terms = query_lower.split()
+        query_key = " ".join(query_terms[:min(5, len(query_terms))])
+        
+        # Generic but query-specific response for other cases
+        return f"Based on your question about {query_key}, the relevant sections from the lease document state: {combined_content[:500]}..."
 
     def _prepare_contextual_query(self, query: str) -> str:
         """Prepare a context-aware query by incorporating recent conversation history."""

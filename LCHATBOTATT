@@ -276,11 +276,10 @@ def setup_azure_llm():
     """Set up Azure OpenAI LLM client"""
     return AzureOpenAI(
         model="gpt-4o-2024-05-13",
-        engine="gpt-4o-2024-05-13",  
         api_key="redacted",
         azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
-        default_headers={"use-case": "ERES Lease Test"},
-        api_version="2023-09-01-preview"
+        api_version="2023-09-01-preview",
+        default_headers={"use-case": "ERES Lease Test"}
     )
 
 def setup_azure_embeddings():
@@ -402,21 +401,21 @@ class InteractiveChatQASystem:
         ]
 
     def generate_answer(self, query: str) -> Dict[str, Any]:
-        """Generate a contextual answer with chat history awareness."""
-        # Prepare context-aware query
-        contextual_query = self._prepare_contextual_query(query)
-        
-        # Find similar texts
-        relevant_texts = self.get_similar_texts(contextual_query)
-        
-        # Prepare context for LLM
-        context_str = "\n\n".join([
-            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
-            for txt in relevant_texts
-        ])
-        
-        # Construct prompt with historical context
-        prompt = f"""Conversation History:
+    """Generate a contextual answer with chat history awareness."""
+    # Prepare context-aware query
+    contextual_query = self._prepare_contextual_query(query)
+    
+    # Find similar texts
+    relevant_texts = self.get_similar_texts(contextual_query)
+    
+    # Prepare context for LLM
+    context_str = "\n\n".join([
+        f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+        for txt in relevant_texts
+    ])
+    
+    # Construct prompt with historical context
+    prompt = f"""Conversation History:
 {self.conversation_context}
 
 Current Question: "{query}"
@@ -434,29 +433,31 @@ Guidelines for response:
 5. If the question cannot be fully answered, explain why
 
 Answer:"""
+    
+    # Generate response
+    try:
+        # Use invoke with text parameter for Azure OpenAI
+        response = self.azure_llm.invoke(prompt)
         
-        # Generate response
-        try:
-            # Use the complete method for Azure LLM
-            response = self.azure_llm.complete(prompt)
+        # Check response format and extract text
+        if hasattr(response, 'content'):
+            response_text = response.content
+        elif isinstance(response, str):
+            response_text = response
+        else:
             response_text = str(response)
-        except Exception as e:
-            print(f"An error occurred while generating response: {e}")
-            try:
-                # Fallback to invoke if complete doesn't work
-                response = self.azure_llm.invoke(prompt=prompt)
-                response_text = response if isinstance(response, str) else response.get('choices', [{}])[0].get('text', '').strip()
-            except Exception as e2:
-                print(f"Fallback method also failed: {e2}")
-                response_text = "I'm sorry, I couldn't generate a response at this time."
-        
-        # Update chat history
-        self._update_chat_history(query, response_text, relevant_texts)
-        
-        return {
-            'answer': response_text,
-            'sources': relevant_texts
-        }
+            
+    except Exception as e:
+        print(f"An error occurred while generating response: {e}")
+        response_text = "I'm sorry, I couldn't generate a response at this time."
+    
+    # Update chat history
+    self._update_chat_history(query, response_text, relevant_texts)
+    
+    return {
+        'answer': response_text,
+        'sources': relevant_texts
+    }
 
     def _prepare_contextual_query(self, query: str) -> str:
         """Prepare a context-aware query by incorporating recent conversation history."""
@@ -614,56 +615,3 @@ qa_system.interactive_chat()
 # qa_system = load_qa_system_from_saved(embedding_path)
 # qa_system.interactive_chat()
 """
-
-
-#error:
-
-Processing document: ../Lease/leasedocs/tolucalease.pdf
-Extracting text with Tesseract OCR...
-Processing page 1/8
-Processing page 2/8
-Processing page 3/8
-Processing page 4/8
-Processing page 5/8
-Processing page 6/8
-Processing page 7/8
-Processing page 8/8
-Detecting language...
-Detected language: es
-Original text saved to: ../Lease/leasedocs/translations/tolucalease_original_es.txt
-Translating from es to English...
-Translated chunk 1
-Translated chunk 2
-Translated chunk 3
-Translated chunk 4
-Translated chunk 5
-Translated chunk 6
-Translated chunk 7
-Translated text saved to: ../Lease/leasedocs/translations/tolucalease_translated_en.txt
-Creating indexed sections for original text...
-Original indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_original_indexed.xlsx
-Creating indexed sections for translated text...
-Translated indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_translated_indexed.xlsx
-Creating embeddings for the document content...
-/tmp/ipykernel_26702/2248345592.py:6: UserWarning: WARNING! engine is not default parameter.
-                engine was transferred to model_kwargs.
-                Please confirm that engine is what you intended.
-  qa_system = process_and_create_qa_system(pdf_path, output_dir)
-DataFrame with embeddings saved to: ../Lease/leasedocs/translations/tolucalease.pdf_with_embeddings.pkl
-Welcome to the Interactive Q&A System!
-Type your questions, or 'exit' to end the conversation.
-Type 'reset' to start a new conversation.
-
-You:  what is the lease start date for the toluca office?
-An error occurred while generating response: 'AzureOpenAI' object has no attribute 'complete'
-Fallback method also failed: BaseLLM.invoke() missing 1 required positional argument: 'input'
-
-Assistant: I'm sorry, I couldn't generate a response at this time.
-
-Sources:
-- Similarity: 0.797
-  Content: d) That the end to which the leased property will be allocated, will be the offices....
-- Similarity: 0.796
-  Content: of the Toluca trade, State of Mexico, under the electronic real folio 
-- Similarity: 0.790
-  Content: The lease will be valid for 2 two forced years for both parties and will begin to supply their effects...

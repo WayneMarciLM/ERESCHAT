@@ -14,6 +14,7 @@ from langchain_openai.embeddings import AzureOpenAIEmbeddings
 from langchain_openai import AzureOpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import List, Dict, Any
+from langchain_openai import ChatAzureOpenAI # Import ChatAzureOpenAI
 
 # Set environment variables for API keys (replace with your actual keys in production)
 def setup_environment_variables():
@@ -29,24 +30,24 @@ setup_environment_variables()
 def extract_text_with_tesseract(pdf_path):
     """
     Extract text from a PDF file using Tesseract OCR.
-    
+
     Args:
         pdf_path: Path to the PDF file
-        
+
     Returns:
         Extracted text from all pages
     """
     try:
         # Convert PDF to images
         images = convert_from_path(pdf_path)
-        
+
         # Extract text from each page image
         extracted_text = ""
         for i, img in enumerate(images):
             print(f"Processing page {i+1}/{len(images)}")
             text = pytesseract.image_to_string(img)
             extracted_text += text + "\n\n"
-            
+
         return extracted_text
     except Exception as e:
         print(f"Error extracting text: {e}")
@@ -67,11 +68,11 @@ def translate_text(text, source_lang="auto", target_lang="en"):
     try:
         if not text.strip():
             return ""
-            
+
         # Handle long texts by breaking them into chunks
         max_chunk_size = 4000  # Safe limit for GoogleTranslator
         result = ""
-        
+
         # Process text in chunks
         for i in range(0, len(text), max_chunk_size):
             chunk = text[i:i + max_chunk_size]
@@ -79,7 +80,7 @@ def translate_text(text, source_lang="auto", target_lang="en"):
                 translated_chunk = GoogleTranslator(source=source_lang, target=target_lang).translate(chunk)
                 result += translated_chunk + " "
                 print(f"Translated chunk {i//max_chunk_size + 1}")
-            
+
         return result.strip()
     except Exception as e:
         print(f"Translation error: {e}")
@@ -89,11 +90,11 @@ def translate_text(text, source_lang="auto", target_lang="en"):
 def create_indexed_sections(text, section_patterns=None):
     """
     Index lines of text and identify sections.
-    
+
     Args:
         text: The text to process
         section_patterns: List of regex patterns to identify section headers
-    
+
     Returns:
         DataFrame with indexed lines and section information
     """
@@ -107,18 +108,18 @@ def create_indexed_sections(text, section_patterns=None):
             r'^(Section\s+\d+[.:])(?:\s+|$)',  # Section headers
             r'^(CHAPTER\s+[IVX0-9]+)(?:\s+|$)' # Chapter headers (Roman or Arabic)
         ]
-    
+
     # Split text into lines and create initial dataframe
     lines = text.split('\n')
     df = pd.DataFrame({
         'line_idx': range(len(lines)),
         'content': lines
     })
-    
+
     # Remove empty lines
     df = df[df['content'].str.strip() != '']
     df = df.reset_index(drop=True)
-    
+
     if len(df) == 0:
         print("Warning: No content found after removing empty lines")
         # Create minimal structure to prevent errors
@@ -130,21 +131,21 @@ def create_indexed_sections(text, section_patterns=None):
             'is_section_header': [True],
             'id': [str(uuid.uuid4())]
         })
-    
+
     # Identify sections
     current_section = "INTRODUCTION"
     sections = []
     section_levels = []
-    
+
     for idx, line in df.iterrows():
         is_section_header = False
         level = None
-        
+
         for pattern in section_patterns:
             if re.match(pattern, line['content'].strip()):
                 current_section = line['content'].strip()
                 is_section_header = True
-                
+
                 # Determine section level
                 if line['content'].startswith('#'):
                     level = len(re.match(r'^(#+)', line['content']).group(1))
@@ -157,17 +158,17 @@ def create_indexed_sections(text, section_patterns=None):
                 else:
                     level = 1
                 break
-        
+
         sections.append(current_section)
         section_levels.append(level)
-    
+
     df['section'] = sections
     df['section_level'] = section_levels
     df['is_section_header'] = [level is not None for level in section_levels]
-    
+
     # Generate unique IDs for each entry
     df['id'] = [str(uuid.uuid4()) for _ in range(len(df))]
-    
+
     return df
 
 # Cell 4: Document Processing Pipeline
@@ -175,29 +176,29 @@ def process_document(pdf_path, output_dir):
     """Process PDF: extract with Tesseract, detect language, translate, and save."""
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Extract text using Tesseract
     print("Extracting text with Tesseract OCR...")
     original_text = extract_text_with_tesseract(pdf_path)
-    
+
     if not original_text.strip():
         print("Warning: No text extracted from the document")
         return None
-    
+
     # Get filename without extension
     base_filename = os.path.splitext(os.path.basename(pdf_path))[0]
-    
+
     # Detect language
     print("Detecting language...")
     detected_lang = detect_language(original_text)
     print(f"Detected language: {detected_lang}")
-    
+
     # Save original text
     original_path = os.path.join(output_dir, f"{base_filename}_original_{detected_lang}.txt")
     with open(original_path, 'w', encoding='utf-8') as f:
         f.write(original_text)
     print(f"Original text saved to: {original_path}")
-    
+
     # Translate if not already English
     if detected_lang != 'en':
         print(f"Translating from {detected_lang} to English...")
@@ -210,7 +211,7 @@ def process_document(pdf_path, output_dir):
         print("Document already in English, skipping translation")
         translated_text = original_text
         translated_path = original_path
-    
+
     return {
         'original_path': original_path,
         'translated_path': translated_path,
@@ -229,14 +230,14 @@ def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
     5. Save processed data
     """
     print(f"Processing document: {pdf_path}")
-    
+
     # Process the document
     doc_info = process_document(pdf_path, output_dir)
-    
+
     if doc_info is None:
         print("Document processing failed - no text extracted")
         return None, None
-    
+
     print("Creating indexed sections for original text...")
     # Create indexed sections for original text
     original_df = create_indexed_sections(
@@ -245,12 +246,12 @@ def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
     )
     original_df['language'] = doc_info['language']
     original_df['is_translated'] = False
-    
+
     # Save indexed original text
     original_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_original_indexed.xlsx")
     original_df.to_excel(original_excel_path, index=False)
     print(f"Original indexed text saved to: {original_excel_path}")
-    
+
     # Create indexed sections for translated text (if different from original)
     if doc_info['language'] != 'en':
         print("Creating indexed sections for translated text...")
@@ -260,12 +261,12 @@ def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
         )
         translated_df['language'] = 'en'
         translated_df['is_translated'] = True
-        
+
         # Save translated dataframe
         translated_excel_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_translated_indexed.xlsx")
         translated_df.to_excel(translated_excel_path, index=False)
         print(f"Translated indexed text saved to: {translated_excel_path}")
-        
+
         return original_df, translated_df
     else:
         print("Document already in English, no separate translated index needed")
@@ -274,24 +275,23 @@ def process_multilingual_document(pdf_path, output_dir, section_patterns=None):
 # Cell 5: Azure OpenAI Setup
 def setup_azure_llm():
     """Set up Azure OpenAI LLM client"""
-    return AzureOpenAI(
-        model="gpt-4o-2024-05-13",
-        api_key="redacted",
-        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
-        api_version="2023-09-01-preview",
-        default_headers={"use-case": "ERES Lease Test"}
+    return ChatAzureOpenAI( # Changed AzureOpenAI to ChatAzureOpenAI
+        openai_api_base="https://cortex.aws.lmig.com/rest/v2/azure", # Corrected parameter name
+        openai_api_key="redacted", # Corrected parameter name
+        openai_api_version="2023-09-01-preview", # Corrected parameter name
+        deployment_name="gpt-4o-2024-05-13", # Corrected parameter name, using deployment name instead of model
+        headers={"use-case": "ERES Lease Test"} # Corrected parameter name
     )
 
 def setup_azure_embeddings():
     """Set up Azure OpenAI Embeddings"""
     return AzureOpenAIEmbeddings(
-        model="text-embedding-ada-002",
-        deployment="text-embedding-ada-002-v2",
         azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
-        openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+        openai_api_key=os.environ.get("CORTEX_API_TOKEN"), # Corrected parameter name
         openai_api_type="azure",
-        openai_api_version="2023-09-01-preview",
-        default_headers={"use-case": "ERES Lease Test"},
+        openai_api_version="2023-09-01-preview", # Corrected parameter name
+        deployment="text-embedding-ada-002-v2", # Corrected parameter name, using deployment name
+        headers={"use-case": "ERES Lease Test"}, # Corrected parameter name
         chunk_size=1,
     )
 
@@ -299,11 +299,11 @@ def setup_azure_embeddings():
 def embed_text_list(text_list, embeddings):
     """
     Embed a list of texts with rate limiting
-    
+
     Args:
         text_list: List of texts to embed
         embeddings: Initialized embeddings object
-        
+
     Returns:
         List of embedded texts
     """
@@ -317,36 +317,36 @@ def embed_text_list(text_list, embeddings):
 def get_similar_texts(query, df, embeddings, embedding_column='embedding', top_n=5):
     """
     Find texts similar to a query using embeddings
-    
+
     Args:
         query: Query text
         df: DataFrame containing texts and embeddings
         embeddings: Initialized embeddings object
         embedding_column: Column name containing embeddings
         top_n: Number of similar texts to return
-        
+
     Returns:
         DataFrame with similar texts
     """
     # Create embedding for the query
     query_embedding = embeddings.embed_documents([query])[0]
-    
+
     # Calculate cosine similarities
     similarities = cosine_similarity(
         np.array(query_embedding).reshape(1, -1),
         np.array(df[embedding_column].tolist())
     )
-    
+
     # Find the indices of the top_n most similar texts
     top_indices = np.argsort(similarities.flatten())[-top_n:][::-1]
-    
+
     # Retrieve the corresponding texts
     return df.iloc[top_indices]
 
 # Cell 7: Interactive Chat System
 class InteractiveChatQASystem:
     def __init__(
-        self, 
+        self,
         azure_llm,
         embeddings: AzureOpenAIEmbeddings,
         df: pd.DataFrame,
@@ -360,17 +360,17 @@ class InteractiveChatQASystem:
         self.text_column = text_column
         self.embedding_column = embedding_column
         self.max_history = max_history
-        
+
         # Prepare metadata fields
         self.metadata_fields = metadata_fields or [
-            col for col in df.columns 
+            col for col in df.columns
             if col not in [text_column, embedding_column]
         ]
-        
+
         # Clean and prepare data
         self.df = df.dropna(subset=[text_column, embedding_column])
         self.embeddings_array = np.array(self.df[embedding_column].tolist())
-        
+
         # Chat history management
         self.reset_conversation()
 
@@ -383,14 +383,14 @@ class InteractiveChatQASystem:
     def get_similar_texts(self, query: str, top_n: int = 3) -> List[Dict]:
         """Retrieve the most similar texts to the query."""
         query_embedding = self.embeddings.embed_documents([query])[0]
-        
+
         similarities = cosine_similarity(
             np.array(query_embedding).reshape(1, -1),
             self.embeddings_array
         ).flatten()
-        
+
         top_indices = np.argsort(similarities)[-top_n:][::-1]
-        
+
         return [
             {
                 'text': self.df.iloc[idx][self.text_column],
@@ -401,21 +401,21 @@ class InteractiveChatQASystem:
         ]
 
     def generate_answer(self, query: str) -> Dict[str, Any]:
-    """Generate a contextual answer with chat history awareness."""
-    # Prepare context-aware query
-    contextual_query = self._prepare_contextual_query(query)
-    
-    # Find similar texts
-    relevant_texts = self.get_similar_texts(contextual_query)
-    
-    # Prepare context for LLM
-    context_str = "\n\n".join([
-        f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
-        for txt in relevant_texts
-    ])
-    
-    # Construct prompt with historical context
-    prompt = f"""Conversation History:
+        """Generate a contextual answer with chat history awareness."""
+        # Prepare context-aware query
+        contextual_query = self._prepare_contextual_query(query)
+
+        # Find similar texts
+        relevant_texts = self.get_similar_texts(contextual_query)
+
+        # Prepare context for LLM
+        context_str = "\n\n".join([
+            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+            for txt in relevant_texts
+        ])
+
+        # Construct prompt with historical context
+        prompt = f"""Conversation History:
 {self.conversation_context}
 
 Current Question: "{query}"
@@ -433,31 +433,31 @@ Guidelines for response:
 5. If the question cannot be fully answered, explain why
 
 Answer:"""
-    
-    # Generate response
-    try:
-        # Use invoke with text parameter for Azure OpenAI
-        response = self.azure_llm.invoke(prompt)
-        
-        # Check response format and extract text
-        if hasattr(response, 'content'):
-            response_text = response.content
-        elif isinstance(response, str):
-            response_text = response
-        else:
-            response_text = str(response)
-            
-    except Exception as e:
-        print(f"An error occurred while generating response: {e}")
-        response_text = "I'm sorry, I couldn't generate a response at this time."
-    
-    # Update chat history
-    self._update_chat_history(query, response_text, relevant_texts)
-    
-    return {
-        'answer': response_text,
-        'sources': relevant_texts
-    }
+
+        # Generate response
+        try:
+            # Use invoke with messages parameter for ChatAzureOpenAI
+            response = self.azure_llm.invoke([{"role": "user", "content": prompt}])
+
+            # Check response format and extract text
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+
+        except Exception as e:
+            print(f"An error occurred while generating response: {e}")
+            response_text = "I'm sorry, I couldn't generate a response at this time."
+
+        # Update chat history
+        self._update_chat_history(query, response_text, relevant_texts)
+
+        return {
+            'answer': response_text,
+            'sources': relevant_texts
+        }
 
     def _prepare_contextual_query(self, query: str) -> str:
         """Prepare a context-aware query by incorporating recent conversation history."""
@@ -474,137 +474,137 @@ Answer:"""
         """Update chat history and conversation context."""
         # Add current interaction to history
         self.chat_history.append({
-            'role': 'user', 
+            'role': 'user',
             'text': query
         })
         self.chat_history.append({
-            'role': 'assistant', 
+            'role': 'assistant',
             'text': response
         })
-        
+
         # Maintain a reasonable history length
         self.chat_history = self.chat_history[-self.max_history:]
-        
+
         # Update conversation context
         self.conversation_context = "\n".join([
             f"{entry['role'].upper()}: {entry['text']}"
             for entry in self.chat_history
         ])
-        
+
         # Store the last response for reference
         self.last_response = response
 
     def interactive_chat(self):
-    """
-    Interactive chat interface in the notebook.
-    Allows continuous questioning until the user chooses to exit.
-    """
-    print("Welcome to the Interactive Q&A System!")
-    print("Type your questions, or 'exit' to end the conversation.")
-    print("Type 'reset' to start a new conversation.")
-    
-    while True:
-        # Get user input
-        user_input = input("\nYou: ").strip()
-        
-        # Check for exit conditions
-        if user_input.lower() == 'exit':
-            print("Goodbye!")
-            break
-        
-        # Check for reset
-        if user_input.lower() == 'reset':
-            self.reset_conversation()
-            print("Conversation reset. Ready for a new discussion.")
-            continue
-        
-        # Generate and display answer
-        try:
-            result = self.generate_answer(user_input)
-            print("\nAssistant:", result['answer'])
-            
-            # Optionally display sources
-            print("\nSources:")
-            for i, source in enumerate(result['sources'], 1):
-                print(f"- Source {i} (Similarity: {source['similarity_score']:.3f})")
-                print(f"  Content: {source['text'][:200]}...")
-        
-        except Exception as e:
-            print(f"An error occurred: {e}")
+        """
+        Interactive chat interface in the notebook.
+        Allows continuous questioning until the user chooses to exit.
+        """
+        print("Welcome to the Interactive Q&A System!")
+        print("Type your questions, or 'exit' to end the conversation.")
+        print("Type 'reset' to start a new conversation.")
+
+        while True:
+            # Get user input
+            user_input = input("\nYou: ").strip()
+
+            # Check for exit conditions
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+
+            # Check for reset
+            if user_input.lower() == 'reset':
+                self.reset_conversation()
+                print("Conversation reset. Ready for a new discussion.")
+                continue
+
+            # Generate and display answer
+            try:
+                result = self.generate_answer(user_input)
+                print("\nAssistant:", result['answer'])
+
+                # Optionally display sources
+                print("\nSources:")
+                for i, source in enumerate(result['sources'], 1):
+                    print(f"- Source {i} (Similarity: {source['similarity_score']:.3f})")
+                    print(f"  Content: {source['text'][:200]}...")
+
+            except Exception as e:
+                print(f"An error occurred: {e}")
 
 # Cell 8: Main Processing Function with Embedding
 def process_and_create_qa_system(pdf_path, output_dir):
     """
     Process a document and create an interactive QA system
-    
+
     Args:
         pdf_path: Path to the PDF document
         output_dir: Directory to save processed files
-        
+
     Returns:
         Interactive QA system
     """
     # Process the document
     original_df, translated_df = process_multilingual_document(pdf_path, output_dir)
-    
+
     # Use the translated dataframe if available, otherwise use the original
     master_df = translated_df if translated_df is not None else original_df
-    
+
     # Initialize Azure OpenAI clients
     azure_llm = setup_azure_llm()
     azure_embeddings = setup_azure_embeddings()
-    
+
     print("Creating embeddings for the document content...")
     # Create embeddings for the text
     master_df['embedding'] = embed_text_list(master_df['content'].tolist(), azure_embeddings)
-    
+
     # Save the dataframe with embeddings
     embedding_path = os.path.join(output_dir, f"{os.path.basename(pdf_path)}_with_embeddings.pkl")
     master_df.to_pickle(embedding_path)
     print(f"DataFrame with embeddings saved to: {embedding_path}")
-    
+
     # Create the interactive QA system
     interactive_system = InteractiveChatQASystem(
         azure_llm=azure_llm,
         embeddings=azure_embeddings,
         df=master_df
     )
-    
+
     return interactive_system
 
 # Cell 9: Load from Saved Embeddings
 def load_qa_system_from_saved(embedding_path):
     """
     Load a QA system from a saved DataFrame with embeddings
-    
+
     Args:
         embedding_path: Path to the saved DataFrame with embeddings
-        
+
     Returns:
         Interactive QA system
     """
     # Load the dataframe with embeddings
     master_df = pd.read_pickle(embedding_path)
-    
+
     # Initialize Azure OpenAI clients
     azure_llm = setup_azure_llm()
     azure_embeddings = setup_azure_embeddings()
-    
+
     # Create the interactive QA system
     interactive_system = InteractiveChatQASystem(
         azure_llm=azure_llm,
         embeddings=azure_embeddings,
         df=master_df
     )
-    
+
     return interactive_system
 
 # Cell 10: Example Usage
 # Example usage - uncomment and customize paths to run
-"""
+
 # Process a new document and create a QA system
-pdf_path = 'path/to/your/document.pdf'
-output_dir = 'path/to/output/directory'
+pdf_path = '../Lease/leasedocs/tolucalease.pdf' # 'path/to/your/document.pdf'
+output_dir = '../Lease/leasedocs/translations' # 'path/to/output/directory'
 
 # Option 1: Process document from scratch
 qa_system = process_and_create_qa_system(pdf_path, output_dir)
@@ -614,52 +614,4 @@ qa_system.interactive_chat()
 # embedding_path = 'path/to/saved/document_with_embeddings.pkl'
 # qa_system = load_qa_system_from_saved(embedding_path)
 # qa_system.interactive_chat()
-"""
 
-
-#error:
-
-Processing document: ../Lease/leasedocs/tolucalease.pdf
-Extracting text with Tesseract OCR...
-Processing page 1/8
-Processing page 2/8
-Processing page 3/8
-Processing page 4/8
-Processing page 5/8
-Processing page 6/8
-Processing page 7/8
-Processing page 8/8
-Detecting language...
-Detected language: es
-Original text saved to: ../Lease/leasedocs/translations/tolucalease_original_es.txt
-Translating from es to English...
-Translated chunk 1
-Translated chunk 2
-Translated chunk 3
-Translated chunk 4
-Translated chunk 5
-Translated chunk 6
-Translated chunk 7
-Translated text saved to: ../Lease/leasedocs/translations/tolucalease_translated_en.txt
-Creating indexed sections for original text...
-Original indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_original_indexed.xlsx
-Creating indexed sections for translated text...
-Translated indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_translated_indexed.xlsx
-Creating embeddings for the document content...
-DataFrame with embeddings saved to: ../Lease/leasedocs/translations/tolucalease.pdf_with_embeddings.pkl
-Welcome to the Interactive Q&A System!
-Type your questions, or 'exit' to end the conversation.
-Type 'reset' to start a new conversation.
-
-You:  In the toluca office are there dedicated parking spaces?
-An error occurred while generating response: Error code: 404 - {'timestamp': 1740519809303, 'status': 404, 'error': 'Not Found', 'message': 'No message available', 'path': '/rest/v2/azure/openai/completions'}
-
-Assistant: I'm sorry, I couldn't generate a response at this time.
-
-Sources:
-- Source 1 (Similarity: 0.816)
-  Content: to the lessee right to use three (3) parking spaces in the parking lot...
-- Source 2 (Similarity: 0.807)
-  Content: First Tent: Parking....
-- Source 3 (Similarity: 0.807)
-  Content: Use of pay parking located in the back of the commercial set “The Adobe estate....

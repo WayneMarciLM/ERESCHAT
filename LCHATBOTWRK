@@ -1,0 +1,372 @@
+#cell 1
+
+import os
+os.environ["OPENAI_API_KEY"] = "redacted"
+
+#cell 2
+
+from llama_index.llms.azure_openai import AzureOpenAI
+
+azure_llm = AzureOpenAI(
+    model="gpt-4o-2024-05-13",
+    engine="gpt-4o-2024-05-13",
+    api_key="redacted",
+    azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+    default_headers={"use-case": "ERES Lease Test"}
+)
+
+# Example usage
+response = azure_llm.complete("tell me a joke about roofs")
+print(response)
+
+
+#cell 3
+
+import pandas as pd
+master_list_df = pd.read_excel("/mnt/N0312850/Lease/FAQ_Export/faq_sections.xlsx")
+
+# Handle NaN values in the 'text' column
+master_list_df['content'] = master_list_df['content'].fillna('')
+
+#cell 4
+
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+from llama_index.legacy.embeddings.langchain import LangchainEmbedding
+import os
+
+# Assuming you have set your API key as an environment variable
+os.environ["CORTEX_API_TOKEN"] = "redacted"  # Secure your API keys appropriately
+
+llama_index_embeddings = LangchainEmbedding(
+    AzureOpenAIEmbeddings(
+        model="text-embedding-ada-002",
+        deployment="TEXT_EMBEDDING_ADA_002_V2",
+        azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",  # Updated to use azure_endpoint
+        openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+        openai_api_type="azure",
+        openai_api_version="2023-09-01-preview",
+        chunk_size=1,
+    ),
+    embed_batch_size=1,
+)
+
+#cell 5
+
+import time
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+import pandas as pd
+import os
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+os.environ["AZURE_OPENAI_API_KEY"] = "redacted"
+# Initialize the embeddings directly
+embeddings = AzureOpenAIEmbeddings(
+    model="text-embedding-ada-002",
+    deployment="text-embedding-ada-002-v2",
+    azure_endpoint="https://cortex.aws.lmig.com/rest/v2/azure",
+    openai_api_key=os.environ.get("CORTEX_API_TOKEN"),
+    openai_api_type="azure",
+    openai_api_version="2023-09-01-preview",
+    default_headers={"use-case": "ERES Lease Test"},
+    chunk_size=1,
+)
+
+# Define a method to embed text data with a delay
+def embed_text_list(text_list):
+    embedded_texts = []
+    for text in text_list:
+        embedded_text = embeddings.embed_documents([text])[0]
+        embedded_texts.append(embedded_text)
+        time.sleep(2)  # Adding delay to avoid rate limit
+    return embedded_texts
+
+# Embed your dataframe text column
+master_list_df['embedding'] = embed_text_list(master_list_df['content'].tolist())
+
+# Define a function for similarity calculation
+def get_similar_texts(query, df, embedding_column='embedding', top_n=5):
+    # Create embedding for the query
+    query_embedding = embeddings.embed_documents([query])[0]
+    
+    # Calculate cosine similarities
+    similarities = cosine_similarity(
+        np.array(query_embedding).reshape(1, -1),
+        np.array(df[embedding_column].tolist())
+    )
+    
+    # Find the indices of the top_n most similar texts
+    top_indices = np.argsort(similarities.flatten())[-top_n:][::-1]
+    
+    # Retrieve the corresponding texts
+    return df.iloc[top_indices]
+
+# Example usage
+query = "Tell me about the Monterrey office and the parties and properties involved in that lease?."
+similar_texts = get_similar_texts(query, master_list_df)
+print(similar_texts[['content']])
+
+
+#cell 6
+
+# Save the embeddings
+master_list_df.to_csv('ERES_FAQ.csv', index=False)
+
+#cell 7
+
+import ast  # Add this import at the top
+
+# Load the embeddings if they exist
+try:
+    master_list_df = pd.read_csv('ERES_FAQ.csv')
+
+    # Convert the string representation of lists back to actual lists
+    master_list_df['embedding'] = master_list_df['embedding'].apply(ast.literal_eval)
+except FileNotFoundError:
+    # Handle the case where the embeddings file doesn't exist
+    # Typically, this involves calculating and saving them as shown above
+    pass
+
+#cell 8
+
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Any
+from sklearn.metrics.pairwise import cosine_similarity
+from llama_index.llms.azure_openai import AzureOpenAI
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
+
+class InteractiveChatQASystem:
+    def __init__(
+        self, 
+        azure_llm: AzureOpenAI, 
+        embeddings: AzureOpenAIEmbeddings,
+        df: pd.DataFrame,
+        text_column: str = 'content',
+        embedding_column: str = 'embedding',
+        metadata_fields: List[str] = None,
+        max_history: int = 5
+    ):
+        self.azure_llm = azure_llm
+        self.embeddings = embeddings
+        self.text_column = text_column
+        self.embedding_column = embedding_column
+        self.max_history = max_history
+        
+        # Prepare metadata fields
+        self.metadata_fields = metadata_fields or [
+            col for col in df.columns 
+            if col not in [text_column, embedding_column]
+        ]
+        
+        # Clean and prepare data
+        self.df = df.dropna(subset=[text_column, embedding_column])
+        self.embeddings_array = np.array(self.df[embedding_column].tolist())
+        
+        # Chat history management
+        self.reset_conversation()
+
+    def reset_conversation(self):
+        """Reset the conversation history."""
+        self.chat_history: List[Dict[str, str]] = []
+        self.conversation_context = ""
+        self.last_response = None
+
+    def get_similar_texts(self, query: str, top_n: int = 3) -> List[Dict]:
+        """Retrieve the most similar texts to the query."""
+        query_embedding = self.embeddings.embed_documents([query])[0]
+        
+        similarities = cosine_similarity(
+            np.array(query_embedding).reshape(1, -1),
+            self.embeddings_array
+        ).flatten()
+        
+        top_indices = np.argsort(similarities)[-top_n:][::-1]
+        
+        return [
+            {
+                'text': self.df.iloc[idx][self.text_column],
+                'metadata': {field: self.df.iloc[idx][field] for field in self.metadata_fields},
+                'similarity_score': float(similarities[idx])
+            }
+            for idx in top_indices
+        ]
+
+    def generate_answer(self, query: str) -> Dict[str, Any]:
+        """Generate a contextual answer with chat history awareness."""
+        # Prepare context-aware query
+        contextual_query = self._prepare_contextual_query(query)
+        
+        # Find similar texts
+        relevant_texts = self.get_similar_texts(contextual_query)
+        
+        # Prepare context for LLM
+        context_str = "\n\n".join([
+            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+            for txt in relevant_texts
+        ])
+        
+        # Construct prompt with historical context
+        prompt = f"""Conversation History:
+{self.conversation_context}
+
+Current Question: "{query}"
+
+Relevant Information:
+{'-' * 40}
+{context_str}
+{'-' * 40}
+
+Guidelines for response:
+1. Directly address the current question
+2. Consider the conversation history
+3. Use information from the sources
+4. Maintain a natural conversational flow
+5. If the question cannot be fully answered, explain why
+
+Answer:"""
+        
+        # Generate response
+        response = self.azure_llm.complete(prompt)
+        response_text = str(response)
+        
+        # Update chat history
+        self._update_chat_history(query, response_text, relevant_texts)
+        
+        return {
+            'answer': response_text,
+            'sources': relevant_texts
+        }
+
+    def _prepare_contextual_query(self, query: str) -> str:
+        """Prepare a context-aware query by incorporating recent conversation history."""
+        if self.chat_history:
+            # Create a summary of recent interactions
+            recent_context = " ".join([
+                f"{entry['role']}: {entry['text']}"
+                for entry in self.chat_history[-self.max_history:]
+            ])
+            return f"{recent_context}\n\nLatest Query: {query}"
+        return query
+
+    def _update_chat_history(self, query: str, response: str, sources: List[Dict]):
+        """Update chat history and conversation context."""
+        # Add current interaction to history
+        self.chat_history.append({
+            'role': 'user', 
+            'text': query
+        })
+        self.chat_history.append({
+            'role': 'assistant', 
+            'text': response
+        })
+        
+        # Maintain a reasonable history length
+        self.chat_history = self.chat_history[-self.max_history:]
+        
+        # Update conversation context
+        self.conversation_context = "\n".join([
+            f"{entry['role'].upper()}: {entry['text']}"
+            for entry in self.chat_history
+        ])
+        
+        # Store the last response for reference
+        self.last_response = response
+
+    def interactive_chat(self):
+        """
+        Interactive chat interface in the notebook.
+        Allows continuous questioning until the user chooses to exit.
+        """
+        print("Welcome to the Interactive Q&A System!")
+        print("Type your questions, or 'exit' to end the conversation.")
+        print("Type 'reset' to start a new conversation.")
+        
+        while True:
+            # Get user input
+            user_input = input("\nYou: ").strip()
+            
+            # Check for exit conditions
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+            
+            # Check for reset
+            if user_input.lower() == 'reset':
+                self.reset_conversation()
+                print("Conversation reset. Ready for a new discussion.")
+                continue
+            
+            # Generate and display answer
+            try:
+                result = self.generate_answer(user_input)
+                print("\nAssistant:", result['answer'])
+                
+                # Optionally display sources
+                print("\nSources:")
+                for source in result['sources']:
+                    print(f"- Similarity: {source['similarity_score']:.3f}")
+                    print(f"  Content: {source['text'][:200]}...")
+            
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+def create_interactive_qa_system(azure_llm, embeddings, master_list_df, metadata_fields=None):
+    """Factory function to create the interactive chat QA system."""
+    return InteractiveChatQASystem(
+        azure_llm=azure_llm,
+        embeddings=embeddings,
+        df=master_list_df,
+        metadata_fields=metadata_fields
+    )
+
+# Example initialization and usage
+interactive_system = create_interactive_qa_system(
+    azure_llm=azure_llm,
+    embeddings=embeddings,
+    master_list_df=master_list_df
+)
+
+# Start the interactive chat
+interactive_system.interactive_chat()
+
+
+# output:
+
+Welcome to the Interactive Q&A System!
+Type your questions, or 'exit' to end the conversation.
+Type 'reset' to start a new conversation.
+
+You:  can you describe what the program managers do in the real estate department at Liberty Mutual?
+
+Assistant: Program managers in the real estate department at Liberty Mutual are responsible for delivering real estate solutions that enable the success of their customers. They use data-driven solutions, innovative thinking, and effective execution to achieve the real estate goals of the enterprise. Their roles may involve client relationship management, workplace operations, and overseeing various aspects of tenant representation and brokerage. They also handle cost estimates for tenant improvements, manage allowances from landlords for building out spaces, and estimate costs for architecture, engineering, cabling, and moves based on past projects.
+
+Sources:
+- Similarity: 0.777
+  Content: - Delivering real estate solutions for our customers to enable their success.
+- Uses data-driven solutions, innovative thinking, and effective execution to achieve the real estate goals of the enterpr...
+- Similarity: 0.768
+  Content: - Client Relationship Execution Management Workplace Operations...
+- Similarity: 0.751
+  Content: - Tenant Representation/Brokerage: Costs associated with brokers.
+- Tenant Improvement: Cost estimates by Design and Construction Managers.
+- Tenant Improvement Allowance (TIA): Credits from landlords...
+
+You:  How do they work with the strategy and insights group (S&I) and what role does strategy and insights play in the department?
+
+Assistant: The Strategy and Insights (S&I) group plays a crucial role in the real estate department at Liberty Mutual by providing the data-driven insights and strategic direction needed to achieve the department's goals. Program managers work closely with the S&I group to ensure that their real estate solutions are aligned with the broader strategic objectives of the enterprise.
+
+The S&I group is responsible for analyzing market trends, evaluating the performance of current real estate assets, and identifying opportunities for optimization and growth. They provide the necessary data and insights that inform decision-making processes, helping program managers to develop and implement effective real estate strategies.
+
+By collaborating with the S&I group, program managers can leverage these insights to make informed decisions about client relationship management, workplace operations, tenant representation, and other key areas. This partnership ensures that the real estate solutions delivered are not only innovative and effective but also aligned with the overall strategic goals of Liberty Mutual.
+
+Sources:
+- Similarity: 0.822
+  Content: - Delivering real estate solutions for our customers to enable their success.
+- Uses data-driven solutions, innovative thinking, and effective execution to achieve the real estate goals of the enterpr...
+- Similarity: 0.787
+  Content: - Client Relationship Execution Management Workplace Operations...
+- Similarity: 0.777
+  Content: - Tenant Representation/Brokerage: Costs associated with brokers.
+- Tenant Improvement: Cost estimates by Design and Construction Managers.
+- Tenant Improvement Allowance (TIA): Credits from landlords...

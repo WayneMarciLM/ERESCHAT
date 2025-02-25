@@ -495,42 +495,42 @@ Answer:"""
         self.last_response = response
 
     def interactive_chat(self):
-        """
-        Interactive chat interface in the notebook.
-        Allows continuous questioning until the user chooses to exit.
-        """
-        print("Welcome to the Interactive Q&A System!")
-        print("Type your questions, or 'exit' to end the conversation.")
-        print("Type 'reset' to start a new conversation.")
+    """
+    Interactive chat interface in the notebook.
+    Allows continuous questioning until the user chooses to exit.
+    """
+    print("Welcome to the Interactive Q&A System!")
+    print("Type your questions, or 'exit' to end the conversation.")
+    print("Type 'reset' to start a new conversation.")
+    
+    while True:
+        # Get user input
+        user_input = input("\nYou: ").strip()
         
-        while True:
-            # Get user input
-            user_input = input("\nYou: ").strip()
+        # Check for exit conditions
+        if user_input.lower() == 'exit':
+            print("Goodbye!")
+            break
+        
+        # Check for reset
+        if user_input.lower() == 'reset':
+            self.reset_conversation()
+            print("Conversation reset. Ready for a new discussion.")
+            continue
+        
+        # Generate and display answer
+        try:
+            result = self.generate_answer(user_input)
+            print("\nAssistant:", result['answer'])
             
-            # Check for exit conditions
-            if user_input.lower() == 'exit':
-                print("Goodbye!")
-                break
-            
-            # Check for reset
-            if user_input.lower() == 'reset':
-                self.reset_conversation()
-                print("Conversation reset. Ready for a new discussion.")
-                continue
-            
-            # Generate and display answer
-            try:
-                result = self.generate_answer(user_input)
-                print("\nAssistant:", result['answer'])
-                
-                # Optionally display sources
-                print("\nSources:")
-                for source in result['sources']:
-                    print(f"- Similarity: {source['similarity_score']:.3f}")
-                    print(f"  Content: {source['text'][:200]}...")
-            
-            except Exception as e:
-                print(f"An error occurred: {e}")
+            # Optionally display sources
+            print("\nSources:")
+            for i, source in enumerate(result['sources'], 1):
+                print(f"- Source {i} (Similarity: {source['similarity_score']:.3f})")
+                print(f"  Content: {source['text'][:200]}...")
+        
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
 # Cell 8: Main Processing Function with Embedding
 def process_and_create_qa_system(pdf_path, output_dir):

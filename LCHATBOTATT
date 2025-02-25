@@ -614,3 +614,56 @@ qa_system.interactive_chat()
 # qa_system = load_qa_system_from_saved(embedding_path)
 # qa_system.interactive_chat()
 """
+
+
+#error:
+
+Processing document: ../Lease/leasedocs/tolucalease.pdf
+Extracting text with Tesseract OCR...
+Processing page 1/8
+Processing page 2/8
+Processing page 3/8
+Processing page 4/8
+Processing page 5/8
+Processing page 6/8
+Processing page 7/8
+Processing page 8/8
+Detecting language...
+Detected language: es
+Original text saved to: ../Lease/leasedocs/translations/tolucalease_original_es.txt
+Translating from es to English...
+Translated chunk 1
+Translated chunk 2
+Translated chunk 3
+Translated chunk 4
+Translated chunk 5
+Translated chunk 6
+Translated chunk 7
+Translated text saved to: ../Lease/leasedocs/translations/tolucalease_translated_en.txt
+Creating indexed sections for original text...
+Original indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_original_indexed.xlsx
+Creating indexed sections for translated text...
+Translated indexed text saved to: ../Lease/leasedocs/translations/tolucalease.pdf_translated_indexed.xlsx
+Creating embeddings for the document content...
+/tmp/ipykernel_26702/2248345592.py:6: UserWarning: WARNING! engine is not default parameter.
+                engine was transferred to model_kwargs.
+                Please confirm that engine is what you intended.
+  qa_system = process_and_create_qa_system(pdf_path, output_dir)
+DataFrame with embeddings saved to: ../Lease/leasedocs/translations/tolucalease.pdf_with_embeddings.pkl
+Welcome to the Interactive Q&A System!
+Type your questions, or 'exit' to end the conversation.
+Type 'reset' to start a new conversation.
+
+You:  what is the lease start date for the toluca office?
+An error occurred while generating response: 'AzureOpenAI' object has no attribute 'complete'
+Fallback method also failed: BaseLLM.invoke() missing 1 required positional argument: 'input'
+
+Assistant: I'm sorry, I couldn't generate a response at this time.
+
+Sources:
+- Similarity: 0.797
+  Content: d) That the end to which the leased property will be allocated, will be the offices....
+- Similarity: 0.796
+  Content: of the Toluca trade, State of Mexico, under the electronic real folio 
+- Similarity: 0.790
+  Content: The lease will be valid for 2 two forced years for both parties and will begin to supply their effects...

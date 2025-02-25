@@ -615,3 +615,18 @@ qa_system.interactive_chat()
 # qa_system = load_qa_system_from_saved(embedding_path)
 # qa_system.interactive_chat()
 """
+
+
+#error:
+
+AttributeError                            Traceback (most recent call last)
+Cell In[24], line 7
+      5 # Option 1: Process document from scratch
+      6 qa_system = process_and_create_qa_system(pdf_path, output_dir)
+----> 7 qa_system.interactive_chat()
+      9 # Option 2: Load from previously processed document
+     10 # embedding_path = 'path/to/saved/document_with_embeddings.pkl'
+     11 # qa_system = load_qa_system_from_saved(embedding_path)
+     12 # qa_system.interactive_chat()
+
+AttributeError: 'InteractiveChatQASystem' object has no attribute 'interactive_chat'

@@ -630,3 +630,153 @@ Cell In[24], line 7
      12 # qa_system.interactive_chat()
 
 AttributeError: 'InteractiveChatQASystem' object has no attribute 'interactive_chat'
+
+
+
+
+class InteractiveChatQASystem:
+    def __init__(
+        self, 
+        azure_llm,
+        embeddings,
+        df: pd.DataFrame,
+        text_column: str = 'content',
+        embedding_column: str = 'embedding',
+        metadata_fields: List[str] = None,
+        max_history: int = 5
+    ):
+        self.azure_llm = azure_llm
+        self.embeddings = embeddings
+        self.text_column = text_column
+        self.embedding_column = embedding_column
+        self.max_history = max_history
+        
+        # Prepare metadata fields
+        self.metadata_fields = metadata_fields or [
+            col for col in df.columns 
+            if col not in [text_column, embedding_column]
+        ]
+        
+        # Clean and prepare data
+        self.df = df.dropna(subset=[text_column, embedding_column])
+        self.embeddings_array = np.array(self.df[embedding_column].tolist())
+        
+        # Chat history management
+        self.reset_conversation()
+
+    def reset_conversation(self):
+        """Reset the conversation history."""
+        self.chat_history: List[Dict[str, str]] = []
+        self.conversation_context = ""
+        self.last_response = None
+
+    def get_similar_texts(self, query: str, top_n: int = 3) -> List[Dict]:
+        """Retrieve the most similar texts to the query."""
+        query_embedding = self.embeddings.embed_documents([query])[0]
+        similarities = cosine_similarity(
+            np.array(query_embedding).reshape(1, -1),
+            self.embeddings_array
+        ).flatten()
+        top_indices = np.argsort(similarities)[-top_n:][::-1]
+        return [
+            {
+                'text': self.df.iloc[idx][self.text_column],
+                'metadata': {field: self.df.iloc[idx][field] for field in self.metadata_fields},
+                'similarity_score': float(similarities[idx])
+            }
+            for idx in top_indices
+        ]
+
+    def generate_answer(self, query: str) -> Dict[str, Any]:
+        """Generate a contextual answer with chat history awareness."""
+        # Prepare context-aware query
+        contextual_query = self._prepare_contextual_query(query)
+        
+        # Find similar texts
+        relevant_texts = self.get_similar_texts(contextual_query)
+        
+        # Prepare context for LLM
+        context_str = "\n\n".join([
+            f"Source (similarity: {txt['similarity_score']:.3f}):\n{txt['text']}"
+            for txt in relevant_texts
+        ])
+        
+        prompt = f"""Conversation History:
+{self.conversation_context}
+
+Current Question: "{query}"
+
+Relevant Information:
+{'-' * 40}
+{context_str}
+{'-' * 40}
+
+Answer:"""
+        try:
+            response = self.azure_llm.invoke(prompt)
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+        except Exception as e:
+            print(f"An error occurred while generating response: {e}")
+            response_text = "I'm sorry, I couldn't generate a response at this time."
+        
+        self._update_chat_history(query, response_text, relevant_texts)
+        
+        return {
+            'answer': response_text,
+            'sources': relevant_texts
+        }
+
+    def _prepare_contextual_query(self, query: str) -> str:
+        """Prepare a context-aware query by incorporating recent conversation history."""
+        if self.chat_history:
+            recent_context = " ".join([
+                f"{entry['role']}: {entry['text']}"
+                for entry in self.chat_history[-self.max_history:]
+            ])
+            return f"{recent_context}\n\nLatest Query: {query}"
+        return query
+
+    def _update_chat_history(self, query: str, response: str, sources: List[Dict]):
+        """Update chat history and conversation context."""
+        self.chat_history.append({'role': 'user', 'text': query})
+        self.chat_history.append({'role': 'assistant', 'text': response})
+        self.chat_history = self.chat_history[-self.max_history:]
+        self.conversation_context = "\n".join([
+            f"{entry['role'].upper()}: {entry['text']}"
+            for entry in self.chat_history
+        ])
+        self.last_response = response
+
+    def interactive_chat(self):
+        """
+        Interactive chat interface in the notebook.
+        Allows continuous questioning until the user chooses to exit.
+        """
+        print("Welcome to the Interactive Q&A System!")
+        print("Type your questions, or 'exit' to end the conversation.")
+        print("Type 'reset' to start a new conversation.")
+        
+        while True:
+            user_input = input("\nYou: ").strip()
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+            if user_input.lower() == 'reset':
+                self.reset_conversation()
+                print("Conversation reset. Ready for a new discussion.")
+                continue
+            try:
+                result = self.generate_answer(user_input)
+                print("\nAssistant:", result['answer'])
+                print("\nSources:")
+                for i, source in enumerate(result['sources'], 1):
+                    print(f"- Source {i} (Similarity: {source['similarity_score']:.3f})")
+                    print(f"  Content: {source['text'][:200]}...")
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
